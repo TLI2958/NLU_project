@@ -1,8 +1,13 @@
-# modified from https://github.com/amazon-science/multiatis/blob/main/code/scripts/bert_soft_align.py
+# modified from soft-align implementation in multiatis: 
+# https://github.com/amazon-science/multiatis/blob/main/code/scripts/bert_soft_align.py
 # implementation of soft-align in paper: https://arxiv.org/pdf/2004.14353
 # original code is in mxnet, this is a port to pytorch + transformers
 
-import collections
+# also from MASSIVE utils:
+# https://github.com/alexa/massive/blob/main/src/massive/utils/
+
+
+from collections import namedtuple
 import os
 from tqdm import tqdm
 import numpy as np
@@ -37,7 +42,6 @@ def seed_everything(seed=random_seed):
     torch.cuda.manual_seed(seed)
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = True
-
 
 
 class MultiTaskICSL(nn.Module):
@@ -141,24 +145,33 @@ def train(train_dataloader, para_dataloader):
     # num_slot_labels & num_intents: according to https://arxiv.org/pdf/2204.08582
     
     model = MultiTaskICSL(base_model, vocab_size, num_slot_labels=55, num_intents=60) 
-    model, optimizer, start_epoch, start_iteration = load_checkpoint(model, optimizer, args)
+    model, optimizer, start_epoch = load_checkpoint(model, optimizer, args)
 
     model.to(device)
 
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
 
-    ic_loss = nn.CrossEntropyLoss(reduction='mean')
-    sl_loss = nn.CrossEntropyLoss(reduction='mean')
-    mce_loss = nn.CrossEntropyLoss(reduction='mean')
+    ic_loss_fn = nn.CrossEntropyLoss(reduction='mean')
+    sl_loss_fn = nn.CrossEntropyLoss(reduction='mean')
+    mt_loss_fn = nn.CrossEntropyLoss(reduction='mean')
 
-    ## TODO: add eval
+    paral_size = len(para_dataloader)
+    label_size = len(train_dataloader)
+
+    #Eval = namedtuple('Eval', ['predictions', 'label_ids'])
 
     pbar = tqdm(range(max(1, start_epoch + 1), args.num_epochs + 1))
     model.train()
 
     for epoch in pbar:
         mt_loss, icsl_loss, step_loss = 0, 0, 0
-                
+        
+        # prepare for eval
+        intent_preds = []
+        slot_preds = []
+        intent_labels = []
+        slot_labels = []
+        
         # train on parallel data
         for i, para_batch in tqdm(enumerate(para_dataloader), 
                                   total=len(para_dataloader)):
@@ -170,10 +183,14 @@ def train(train_dataloader, para_dataloader):
             
             translation, intent_pred, slot_pred = model.translate_and_predict(source, 
                                                                               target, source_attn_mask)
-            
-            ic_loss = mce_loss(intent_pred, intent_label)
-            sl_loss = mce_loss(slot_pred, slot_label)
-            mce_loss = mce_loss(translation, target[:, 1:])
+            intent_preds.append(intent_pred)
+            slot_preds.append(slot_pred)
+            intent_labels.append(intent_label)
+            slot_labels.append(slot_label)
+
+            ic_loss = ic_loss_fn(intent_pred, intent_label)
+            sl_loss = sl_loss_fn(slot_pred.transpose(1,2), slot_label)
+            mce_loss = mt_loss_fn(translation.transpose(1,2), target[:, 1:])
             loss = ic_loss + sl_loss + mce_loss
 
             optimizer.zero_grad()
@@ -182,21 +199,31 @@ def train(train_dataloader, para_dataloader):
             icsl_loss += ic_loss.item() + sl_loss.item()
             mt_loss += mce_loss.item()
         
-            # TODO: add eval
 
-            if i%200 == 0:
-                save_checkpoint(model, optimizer, epoch, i, args, load_dataset = 'parallel')
+        save_checkpoint(model, optimizer, epoch, args, load_dataset = 'parallel')
         
+        predictions = (torch.cat(intent_preds), torch.cat(slot_preds))
+        label_ids = (torch.cat(intent_labels), torch.cat(slot_labels))
+        eval_data = Eval(predictions=predictions, label_ids=label_ids)
+        compute_metrics = create_compute_metrics()
+        with torch.no_grad():
+            res = compute_metrics(eval_data)
+        print('training on parallel data...')
         pbar.set_postfix({'dataset': 'parallel',
-                        'train_loss': loss.item() / (len(para_dataloader) * args.batch_size), 
-                          'icsl_loss': icsl_loss / (len(para_dataloader) * args.batch_size),
-                          'mt_loss': mt_loss / (len(para_dataloader) * args.batch_size),})
+                        'train_loss': loss.item() / paral_size , 
+                          'icsl_loss': icsl_loss / paral_size,
+                          'mt_loss': mt_loss / (paral_size ),
+                          'intent_acc': res['intent_acc'],
+                          'slot_f1': res['slot_f1'],
+                          'ex_match_acc': res['ex_match_acc']})
         
-
-        # TODO: add eval
-
 
         # train on labeled data
+        intent_preds = []
+        slot_preds = []
+        intent_labels = []
+        slot_labels = []
+
 
         for i, batch in tqdm(enumerate(train_dataloader), 
                              total=len(train_dataloader)):
@@ -204,27 +231,98 @@ def train(train_dataloader, para_dataloader):
             inputs, slot_label, intent_label, attn_mask = (inputs.to(device), slot_label.to(device), 
                                                            intent_label.to(device), attn_mask.to(device))
             intent_pred, slot_pred = model(inputs, attn_mask)
-            ic_loss = mce_loss(intent_pred, intent_label)
-            sl_loss = mce_loss(slot_pred, slot_label)
+            ic_loss = ic_loss_fn(intent_pred, intent_label)
+            sl_loss = sl_loss_fn(slot_pred, slot_label)
             loss = ic_loss + sl_loss
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
             step_loss += loss.item()
 
+            intent_preds.append(intent_pred)
+            slot_preds.append(slot_pred)
+            intent_labels.append(intent_label)
+            slot_labels.append(slot_label)
+
+
             if i%200 == 0:
                 save_checkpoint(model, optimizer, epoch, i, args, load_dataset = 'labeled')        
 
-        # TODO: add eval
+        predictions = (torch.cat(intent_preds), torch.cat(slot_preds))
+        label_ids = (torch.cat(intent_labels), torch.cat(slot_labels))
+        eval_data = Eval(predictions=predictions, label_ids=label_ids)
+        with torch.no_grad():
+            compute_metrics = create_compute_metrics()
+        res = compute_metrics(eval_data)
+        print('training on labeled data only...')
         pbar.set_postfix({'dataset': 'labeled',
-                          'train_loss': loss.item() / (len(para_dataloader) * args.batch_size),})
+                          'train_loss': loss.item() / (label_size),
+                          'intent_acc': res['intent_acc'],
+                          'slot_f1': res['slot_f1'],
+                          'ex_match_acc': res['ex_match_acc']})
+        
+        with open(os.path.join(args.save_dir, 'train.log'), 'a') as f:
+            f.write(f'epoch: {epoch}\ticsl_loss: {icsl_loss / paral_size}\tmt_loss: {mt_loss / paral_size}\tstep_loss: {step_loss / label_size}\n\nintent_acc: {res["intent_acc"]}\tslot_f1: {res["slot_f1"]}\tex_match_acc: {res["ex_match_acc"]}\n')
 
 
-def evaluate(eval_dataloader, output_dir, criterion):
+
+def evaluate(model, eval_dataloader):
     """Evaluate the model on validation dataset.
+        
+    Should be held-out Chinese utterances
+    using  `eval_preds` from massive_utils
     """
+    ic_loss_fn = nn.CrossEntropyLoss(reduction='mean')
+    sl_loss_fn = nn.CrossEntropyLoss(reduction='mean')
 
-    return intent_acc, slot_f1
+    intent_preds = []
+    slot_preds = []
+    intent_labels = []
+    slot_labels = []
+    #output_to_eval = namedtuple('Eval', ['predictions', 'label_ids'])
+
+    eval_size = len(eval_dataloader)    
+
+    model.to(device)
+    model.eval()
+    with torch.no_grad():
+        step_loss = 0
+        for i, batch in tqdm(enumerate(eval_dataloader), 
+                                total=len(eval_dataloader)):
+            inputs, slot_label, intent_label, attn_mask = batch
+            inputs, slot_label, intent_label, attn_mask = (inputs.to(device), slot_label.to(device), 
+                                                            intent_label.to(device), attn_mask.to(device))
+            intent_pred, slot_pred = model(inputs, attn_mask)
+            ic_loss = ic_loss_fn(intent_pred, intent_label)
+            sl_loss = sl_loss_fn(slot_pred, slot_label)
+            loss = ic_loss + sl_loss
+            step_loss += loss.item()
+
+            intent_preds.append(intent_pred)
+            slot_preds.append(slot_pred)
+            intent_labels.append(intent_label)
+            slot_labels.append(slot_label)     
+
+        predictions = (torch.cat(intent_preds), torch.cat(slot_preds))
+        label_ids = (torch.cat(intent_labels), torch.cat(slot_labels))
+        eval_data = Eval(predictions=predictions, label_ids=label_ids)
+        compute_metrics = create_compute_metrics()
+        res = compute_metrics(eval_data)
+        average_loss = step_loss / eval_size
+
+        print(f"Evaluate...\nEval Loss: {average_loss:.4f}\n"
+            f"Intent Accuracy: {res['intent_acc']:.2f}\n"
+            f"Slot F1: {res['slot_f1']:.2f}\n"
+            f"Exact Match Accuracy: {res['ex_match_acc']:.2f}")
+        # Logging to file
+        log_message = (f"eval loss: {average_loss:.4f}, "
+                    f"intent accuracy: {res['intent_acc']:.2f}, "
+                    f"slot f1: {res['slot_f1']:.2f}, "
+                    f"exact match accuracy: {res['ex_match_acc']:.2f}\n")
+            
+        with open(os.path.join(args.save_dir, 'eval.log'), 'a') as f:
+            f.write(log_message)
+
 
 
 if __name__ == "__main__":
@@ -243,5 +341,8 @@ if __name__ == "__main__":
 
     base_model = XLMRobertaModel.from_pretrained('facebookAI/xlm-roberta-base')
     tokenizer = AutoTokenizer.from_pretrained(args.checkpoint)
+    Eval = namedtuple('Eval', ['predictions', 'label_ids'])
 
+    
+    
 

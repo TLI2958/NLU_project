@@ -20,7 +20,7 @@ Copyright and license details can be found in `NOTICE.md`.
 # Modified from JointBERT:
 # https://github.com/monologg/JointBERT/blob/master/model/modeling_jointbert.py
 
-# From MASSIVE, slight modifications: 
+# Mainly From MASSIVE, slight modifications: 
 # https://github.com/alexa/massive/blob/main/src/massive/models/xlmr_ic_sf.py
 # https://github.com/alexa/massive/blob/main/src/massive/utils/training_utils.py
 # https://github.com/alexa/massive/blob/main/src/massive/loaders/collator_ic_sf.py
@@ -41,6 +41,10 @@ import numpy as np
 import sklearn.metrics as sklm
 from seqeval.metrics import f1_score
 from math import sqrt
+
+random_seed = 1012
+
+torch.seed(random_seed)
 
 # note: we are using the dataset: 
 # https://huggingface.co/datasets/AmazonScience/massive
@@ -130,9 +134,12 @@ class CollatorMASSIVEIntentClassSlotFill:
         # Convert to PyTorch tensors
         return {k: torch.tensor(v, dtype=torch.int64) for k, v in pad_tok_inputs.items()}
 
-    
+
+
+
+
 # compute metrics
-def create_compute_metrics(intent_labels, slot_labels, tokenizer=None, ignore_labels=None,
+def create_compute_metrics(intent_labels = None, slot_labels = None, ignore_labels=None,
                            metrics='all'):
     """
     Create a `compute_metrics` function for this task
@@ -157,16 +164,10 @@ def create_compute_metrics(intent_labels, slot_labels, tokenizer=None, ignore_la
 
     if type(metrics) != list:
         metrics = [metrics]
-
-    # COLLATOR: MASSIVE INTENT CLASS SLOT FILL
     def compute_metrics(p):
-        # p is named tuple with `predictions` and `label_ids`.
-        # p.predictions is a tuple of two elements, the first being the intent classification
-        # predictions of size num_examples and the second being the slot classification preds
-        # of size num_examples. Each intent classification pred is of size num_intent_classes,
-        # and each slot classification prediction is of shape (seq_len, num_slot_classes)
-        # label_ids is tuple of two elements, first array of all IC labels (size num_examples)
-        # The second element is size num_examples with each entry sized seq_len x num_slot_class
+
+        if type(metrics) != list:
+            metrics = [metrics]
 
         intent_preds = p.predictions[0]
         slot_preds = p.predictions[1]
@@ -174,8 +175,8 @@ def create_compute_metrics(intent_labels, slot_labels, tokenizer=None, ignore_la
         intent_label_tuple = p.label_ids[0]
         slot_label_tuple = p.label_ids[1]
 
-        intent_preds_am = [np.argmax(x) for x in intent_preds]
-        slot_preds_am = [np.argmax(x, axis=1) for x in slot_preds]
+        intent_preds_am = [torch.argmax(x) for x in intent_preds]
+        slot_preds_am = [torch.argmax(x, axis=1) for x in slot_preds]
 
         # merge -100, which we used for the subsequent subwords in a full word after tokenizing
         labels_merge = [-100]
@@ -187,13 +188,10 @@ def create_compute_metrics(intent_labels, slot_labels, tokenizer=None, ignore_la
             lab_slots=slot_label_tuple,
             eval_metrics=metrics,
             labels_merge=labels_merge,
-            labels_ignore=ignore_num_lab,
+            ignore_labels=ignore_num_lab,
             pad='Other'
         )
-
-
     return compute_metrics
-
 
 # eval function: 
 def eval_preds(pred_intents=None, lab_intents=None, pred_slots=None, lab_slots=None,
@@ -333,93 +331,6 @@ def convert_to_bio(seq_tags, outside='Other', labels_merge=None):
 
     return bio_tagged
 
-def eval_preds(pred_intents=None, lab_intents=None, pred_slots=None, lab_slots=None,
-               eval_metrics='all', labels_ignore='Other', labels_merge=None, pad='Other'):
-    """
-    Function to evaluate the predictions from a model
-
-    :param pred_intents: a list of predicted intents
-    :type pred_intents: list
-    :param lab_intents: a list of intents labels (ground truth)
-    :type lab_intents: list
-    :param pred_slots: a list of predicted slots, where each entry is a list of token-based slots
-    :type pred_slots: list
-    :param lab_slots: a list of slots labels (ground truth)
-    :type lab_slots: list
-    :param eval_metrics: The metrics to include. Options are 'all', 'intent_acc', 'ex_match_acc',
-                         'slot_micro_f1'
-    :type eval_metrics: str
-    :param labels_ignore: The labels to ignore (prune away). Default: ['Other']
-    :type labels_ignore: str or list
-    :param labels_merge: The labels to merge leftward (i.e. for tokenized inputs)
-    :type labels_merge: str or list
-    :param pad: The value to use when padding slot predictions to match the length of ground truth
-    :type pad: str
-    """
-
-    results = {}
-
-    # Check lengths
-    if pred_intents is not None and lab_intents is not None:
-        assert len(pred_intents) == len(lab_intents),"pred_intents and lab_intents must be same len"
-    if pred_slots is not None and lab_slots is not None:
-        assert len(pred_slots) == len(lab_slots), "pred_slots and lab_slots must be same length"
-
-    if ('intent_acc' in eval_metrics) or ('all' in eval_metrics):
-        intent_acc = sklm.accuracy_score(lab_intents, pred_intents)
-        results['intent_acc'] = intent_acc
-        # Assuming normal distribution. Multiply by z (from "z table") to get confidence int
-        results['intent_acc_stderr'] = sqrt(intent_acc*(1-intent_acc)/len(pred_intents))
-
-    if lab_slots is not None and pred_slots is not None:
-        bio_slot_labels, bio_slot_preds = [], []
-        for lab, pred in zip(lab_slots, pred_slots):
-
-            # Pad or truncate prediction as needed using `pad` arg
-            if type(pred) == list:
-                pred = pred[:len(lab)] + [pad]*(len(lab) - len(pred))
-
-            # Fix for Issue 21 -- subwords after the first one from a word should be ignored
-            for i, x in enumerate(lab):
-                if x == -100:
-                    pred[i] = -100
-
-            # convert to BIO
-            bio_slot_labels.append(
-                convert_to_bio(lab, outside=labels_ignore, labels_merge=labels_merge)
-            )
-            bio_slot_preds.append(
-                convert_to_bio(pred, outside=labels_ignore, labels_merge=labels_merge)
-            )
-
-    if ('slot_micro_f1' in eval_metrics) or ('all' in eval_metrics):
-
-        # from seqeval
-        smf1 = f1_score(bio_slot_labels, bio_slot_preds)
-        results['slot_micro_f1'] = smf1
-        # Assuming normal distribution. Multiply by z (from "z table") to get confidence int
-        total_slots = sum([len(x) for x in bio_slot_preds])
-        results['slot_micro_f1_stderr'] = sqrt(smf1*(1-smf1)/total_slots)
-
-    if ('ex_match_acc' in eval_metrics) or ('all' in eval_metrics):
-        # calculate exact match accuracy (~0.01 seconds)
-        matches = 0
-        denom = 0
-        for p_int, p_slot, l_int, l_slot in zip(pred_intents,
-                                                bio_slot_preds,
-                                                lab_intents,
-                                                bio_slot_labels):
-
-            if (p_int == l_int) and (p_slot == l_slot):
-                matches += 1
-            denom += 1
-        emacc = matches / denom
-
-        results['ex_match_acc'] = emacc
-        # Assuming normal distribution. Multiply by z (from "z table") to get confidence int
-        results['ex_match_acc_stderr'] = sqrt(emacc*(1-emacc)/len(pred_intents))
-
-    return results
 
 def output_predictions(outputs, intent_labels, slot_labels, conf, tokenizer=None,
                        combine_slots=True, remove_slots=None, add_pred_parse=True,
@@ -563,12 +474,11 @@ def output_predictions(outputs, intent_labels, slot_labels, conf, tokenizer=None
 
 
 # checkpoint
-def save_checkpoint(model, optimizer, epoch, i, args, loader_name = None):
+def save_checkpoint(model, optimizer, epoch, args, loader_name = None):
     if loader_name is None:
         checkpoint_path = f'{args.save_dir}/trained_{args.label}_checkpoint.pth'
         torch.save({
             'epoch': epoch,
-            'iteration': i,
             'model_state_dict': model.state_dict(),
             'optimizer_state_dict': optimizer.state_dict(),
         }, checkpoint_path)
@@ -576,7 +486,6 @@ def save_checkpoint(model, optimizer, epoch, i, args, loader_name = None):
         checkpoint_path = f'{args.save_dir}/trained_{args.label}_{loader_name}_checkpoint.pth'
         torch.save({
             'epoch': epoch,
-            'iteration': i,
             'model_state_dict': model.state_dict(),
             'optimizer_state_dict': optimizer.state_dict(),
         }, checkpoint_path)
@@ -590,9 +499,8 @@ def load_checkpoint(model, optimizer, args, loader_name = None):
             model.load_state_dict(checkpoint['model_state_dict'])
             optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
             epoch = checkpoint['epoch']
-            iteration = checkpoint['iteration']
-            print(f"Checkpoint found. Resuming training from epoch {epoch}, iteration {iteration}.")
-            return model, optimizer, epoch, iteration
+            print(f"Checkpoint found. Resuming training from epoch {epoch}.")
+            return model, optimizer, epoch
         else:
             return model, optimizer, 0, 0
     else:
@@ -602,8 +510,71 @@ def load_checkpoint(model, optimizer, args, loader_name = None):
             model.load_state_dict(checkpoint['model_state_dict'])
             optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
             epoch = checkpoint['epoch']
-            iteration = checkpoint['iteration']
-            print(f"Checkpoint found. Resuming training from epoch {epoch}, iteration {iteration}.")
-            return model, optimizer, epoch, iteration
+            print(f"Checkpoint found. Resuming training from epoch {epoch}.")
+            return model, optimizer, epoch
         else:
-            return model, optimizer, 0, 0
+            return model, optimizer, 0
+        
+
+def prepare_train_dev_datasets(conf, tokenizer, seed=random_seed):
+    """
+    Prepare the training and dev datasets based on the config.
+
+    :param conf: The MASSIVE configuration object
+    :type conf: massive.Configuration
+    :param tokenizer: The loaded tokenizer
+    :type tokenizer: PreTrainedTokenizerFast
+    :return: train set, dev set, an intent dictionary, a slot dictionary
+    :rtype: tuple(Dataset, Dataset, dict, dict)
+    """
+
+    train = datasets.load_from_disk(conf.get('train_val.train_dataset'))
+    train = train.shuffle(seed=seed)
+
+    # Filter to specific train locales
+    train_locales = conf.get('train_val.train_locales', default='all')
+    if train_locales != 'all' and train_locales != ['all']:
+        logger.info(f"Filtering train dataset to locale(s): {train_locales}")
+        if type(train_locales) == str:
+            train_locales = [train_locales]
+        train = train.filter(lambda x: x['locale'] in train_locales)
+
+    logger.info(f"The features of the train dataset: {train.features}")
+    logger.info(f"Length of the train dataset: {len(train)}")
+
+    dev = datasets.load_from_disk(conf.get('train_val.dev_dataset'))
+
+    # Filter to specific dev locales
+    dev_locales = conf.get('train_val.dev_locales', default='all')
+    if dev_locales != 'all' and dev_locales != ['all']:
+        logger.info(f"Filtering dev dataset to locale(s): {dev_locales}")
+        if type(dev_locales) == str:
+            dev_locales = [dev_locales]
+        dev = dev.filter(lambda x: x['locale'] in dev_locales)
+
+    # Remove specified locales in the dev set
+    dev_locales_remove = conf.get('train_val.dev_locales_remove', default='none')
+    if dev_locales_remove != 'none' and dev_locales_remove != ['none']:
+        logger.info(f"Removing locale(s) from dev dataset: {dev_locales_remove}")
+        if type(dev_locales_remove) == str:
+            dev_locales_remove = [dev_locales_remove]
+        dev = dev.filter(lambda x: x['locale'] not in dev_locales_remove)
+
+    # Shuffle the dev set
+    dev = dev.shuffle(seed=seed)
+
+    # Shorten the dev set to the first N examples if desired
+    if conf.get('train_val.dev_shorten_to', None):
+        dev = dev.select(range(conf.get('train_val.dev_shorten_to')))
+
+    # Load the intent and slot labels
+    with open(conf.get('train_val.intent_labels'), 'r') as i:
+        intent_labels = json.load(i)
+    with open(conf.get('train_val.slot_labels'), 'r') as s:
+        slot_labels = json.load(s)
+
+    logger.info(f"The features of the train dataset: {train.features}")
+    logger.info(f"Length of the train dataset: {len(train)}")
+    logger.info(f"Length of the loaded dev dataset: {len(dev)}")
+
+    return train, dev, intent_labels, slot_labels
