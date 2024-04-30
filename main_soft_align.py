@@ -8,7 +8,6 @@ from tqdm import tqdm
 import numpy as np
 import random
 import argparse
-
 import warnings
 
 import torch 
@@ -18,8 +17,8 @@ from torch.utils.data import DataLoader
 
 
 from transformers import AutoTokenizer, XLMRobertaModel
-import evaluate
 from datasets import load_dataset
+import evaluate
 
 from massive_utils import *
 
@@ -139,8 +138,11 @@ class MultiTaskICSL(nn.Module):
 def train(train_dataloader, para_dataloader):
     vocab = tokenizer.get_vocab()
     vocab_size = len(vocab)
+    # num_slot_labels & num_intents: according to https://arxiv.org/pdf/2204.08582
+    
+    model = MultiTaskICSL(base_model, vocab_size, num_slot_labels=55, num_intents=60) 
+    model, optimizer, start_epoch, start_iteration = load_checkpoint(model, optimizer, args)
 
-    model = MultiTaskICSL(base_model, vocab_size, num_slot_labels=55, num_intents=60) # according to https://arxiv.org/pdf/2204.08582
     model.to(device)
 
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
@@ -149,17 +151,17 @@ def train(train_dataloader, para_dataloader):
     sl_loss = nn.CrossEntropyLoss(reduction='mean')
     mce_loss = nn.CrossEntropyLoss(reduction='mean')
 
-    
-    pbar = tqdm(range(1, args.num_epochs + 1))
+    ## TODO: add eval
+
+    pbar = tqdm(range(max(1, start_epoch + 1), args.num_epochs + 1))
     model.train()
 
     for epoch in pbar:
-        mt_loss, icsl_loss = 0, 0
+        mt_loss, icsl_loss, step_loss = 0, 0, 0
                 
         # train on parallel data
         for i, para_batch in tqdm(enumerate(para_dataloader), 
                                   total=len(para_dataloader)):
-
             source, target, slot_label, intent_label, source_attn_mask = para_batch
             source, target, slot_label, intent_label, source_attn_mask = (source.to(device), 
                                                                          target.to(device), slot_label.to(device), 
@@ -177,27 +179,45 @@ def train(train_dataloader, para_dataloader):
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
-            icsl_loss += loss.item()
-            mt_loss += loss.item()
+            icsl_loss += ic_loss.item() + sl_loss.item()
+            mt_loss += mce_loss.item()
         
             # TODO: add eval
 
             if i%200 == 0:
-                save_checkpoint(model, optimizer, epoch, i, args)
+                save_checkpoint(model, optimizer, epoch, i, args, load_dataset = 'parallel')
         
-        pbar.set_postfix({'train_loss': loss.item() / (len(para_dataloader) * args.batch_size), 
-                          'ic_loss': ic_loss.item() / (len(para_dataloader) * args.batch_size),
-                            'sl_loss': sl_loss.item() / (len(para_dataloader) * args.batch_size),})
-
+        pbar.set_postfix({'dataset': 'parallel',
+                        'train_loss': loss.item() / (len(para_dataloader) * args.batch_size), 
+                          'icsl_loss': icsl_loss / (len(para_dataloader) * args.batch_size),
+                          'mt_loss': mt_loss / (len(para_dataloader) * args.batch_size),})
+        
 
         # TODO: add eval
 
 
         # train on labeled data
-        pbar = tqdm(range(1, args.num_epochs + 1))
-        for 
-    
-       
+
+        for i, batch in tqdm(enumerate(train_dataloader), 
+                             total=len(train_dataloader)):
+            inputs, slot_label, intent_label, attn_mask = batch
+            inputs, slot_label, intent_label, attn_mask = (inputs.to(device), slot_label.to(device), 
+                                                           intent_label.to(device), attn_mask.to(device))
+            intent_pred, slot_pred = model(inputs, attn_mask)
+            ic_loss = mce_loss(intent_pred, intent_label)
+            sl_loss = mce_loss(slot_pred, slot_label)
+            loss = ic_loss + sl_loss
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+            step_loss += loss.item()
+
+            if i%200 == 0:
+                save_checkpoint(model, optimizer, epoch, i, args, load_dataset = 'labeled')        
+
+        # TODO: add eval
+        pbar.set_postfix({'dataset': 'labeled',
+                          'train_loss': loss.item() / (len(para_dataloader) * args.batch_size),})
 
 
 def evaluate(eval_dataloader, output_dir, criterion):
