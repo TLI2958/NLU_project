@@ -68,8 +68,9 @@ def train(train_dataloader, para_dataloader):
     vocab = tokenizer.get_vocab()
     vocab_size = len(vocab)
     # num_slot_labels & num_intents: according to https://arxiv.org/pdf/2204.08582
+    # note 56 num_slot_labels! not 55!
     
-    model = MultiTaskICSL(base_model, vocab_size, num_slot_labels=55, num_intents=60) 
+    model = MultiTaskICSL(base_model, vocab_size, num_slot_labels=56, num_intents=61) 
     optimizer = Adam(model.parameters(), lr= args.lr)
 
     model, optimizer, start_epoch = load_checkpoint(model, optimizer, args)
@@ -261,8 +262,8 @@ if __name__ == "__main__":
     parser.add_argument("--model_dir", type=str, default="./out")
     parser.add_argument("--lr", type=float, default=1e-5)
     parser.add_argument("--label", type=str, default="ICSL")
-    parser.add_argument("--num_epochs", type=int, default=3)
-    parser.add_argument("--batch_size", type=int, default=32)
+    parser.add_argument("--num_epochs", type=int, default=1)
+    parser.add_argument("--batch_size", type=int, default=8)
 
     args = parser.parse_args()
     random_seed = 1012
@@ -283,19 +284,18 @@ if __name__ == "__main__":
     para_dataset = deepcopy(en_train)
     para_dataset = para_dataset.add_column("target_utt", zh_train['utt'])
 
-    batch_size = 8
-    para_dataloader = DataLoader(para_dataset, batch_size=batch_size, shuffle=True, 
+    para_dataloader = DataLoader(para_dataset, batch_size=args.batch_size, shuffle=True, 
                                 collate_fn=CollatorMASSIVEIntentClassSlotFill_para(tokenizer=tokenizer, max_length=512))
-    train_dataloader = DataLoader(en_train, batch_size=batch_size, shuffle=True, 
+    train_dataloader = DataLoader(en_train, batch_size=args.batch_size, shuffle=True, 
                                 collate_fn=CollatorMASSIVEIntentClassSlotFill(tokenizer=tokenizer, max_length=512))
-    eval_dataloader = DataLoader(zh_val, batch_size=batch_size, shuffle=True,
+    eval_dataloader = DataLoader(zh_val, batch_size=args.batch_size, shuffle=True,
                                     collate_fn=CollatorMASSIVEIntentClassSlotFill(tokenizer=tokenizer, max_length=512))
     if args.train:
         train(train_dataloader, para_dataloader)
     if args.eval:
         vocab = tokenizer.get_vocab()
         vocab_size = len(vocab)
-        model = MultiTaskICSL(base_model, vocab_size, num_slot_labels=55, num_intents=60)
+        model = MultiTaskICSL(base_model, vocab_size, num_slot_labels=56, num_intents=60)
         optimizer = Adam(model.parameters(), lr= args.lr)
         model, optimizer, start_epoch = load_checkpoint(model, optimizer, args, loader_name='labeled')
         evaluate(model, eval_dataloader)
