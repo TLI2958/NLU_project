@@ -34,6 +34,7 @@ from transformers import (
     XLMRobertaTokenizer
 )
 import datasets
+from datasets import load_dataset
 
 import os
 import json
@@ -41,6 +42,15 @@ import numpy as np
 import sklearn.metrics as sklm
 from seqeval.metrics import f1_score
 from math import sqrt
+import warnings
+import sklearn.exceptions
+warnings.filterwarnings('ignore', category=DeprecationWarning)
+warnings.filterwarnings('ignore', category=UserWarning)
+warnings.filterwarnings('ignore', category=FutureWarning)
+warnings.filterwarnings("ignore", category=sklearn.exceptions.UndefinedMetricWarning)
+
+
+
 
 random_seed = 1012
 
@@ -50,6 +60,112 @@ torch.seed(random_seed)
 # https://huggingface.co/datasets/AmazonScience/massive
 
 # collator function for MASSIVE intent classification and slot filling
+# modified for para_dataloaderclass CollatorMASSIVEIntentClassSlotFill_para:
+class CollatorMASSIVEIntentClassSlotFill_para:
+    """
+    Data collator for the MASSIVE intent classification and slot tasks
+    Based on: https://github.com/huggingface/transformers/blob/v4.16.2/src/transformers/data/data_collator.py#L212
+
+    :param tokenizer: The tokenizer
+    :type tokenizer: transformers.PreTrainedTokenizerFast
+    :param padding: True or 'longest' pads to longest seq in batch, 'max_length' to the specified
+                    max_length, and False or 'do_not_pad' to not pad (default)
+    :type padding: bool, str, or transformers.file_utils.PaddingStrategy
+    :param max_length: max length for truncation and/or padding (optional)
+    :type max_length: int
+    :param pad_to_multiple_of: set the padding such that sequence is multiple of this (optional)
+    :type pad_to_multiple_of: int
+    """
+
+    def __init__(self, tokenizer, max_length, padding='longest', pad_to_multiple_of=None):
+        self.tokenizer = tokenizer
+        self.max_length = max_length
+        self.padding = padding
+        self.pad_to_multiple_of = pad_to_multiple_of
+
+        self.col_chk = 0
+
+    def __call__(self, batch):
+        # On-the-fly tokenization and alignment -- do NOT use a pre-tokenized dataset
+
+        tokenized_source = self.tokenizer(
+            [item['utt'] for item in batch],
+            truncation=True,
+            is_split_into_words=True
+        )
+
+        tokenized_target = self.tokenizer(
+            [item['target_utt'] for item in batch],
+            truncation=True,
+            is_split_into_words=True
+        )
+
+        # Align the labels with the tokenized utterance
+        # adapted from here: https://huggingface.co/docs/transformers/custom_datasets#tok_ner
+        for i, entry in enumerate(batch):
+            label = entry['slots_num']
+            word_ids = tokenized_source.word_ids(batch_index=i)  # source
+            previous_word_idx = None
+            source_ids = []
+            # Set the special tokens to -100.
+            for word_idx in word_ids:
+                if word_idx is None:
+                    source_ids.append(-100)
+                # Only label the first token of a given word.
+                elif word_idx != previous_word_idx:
+                    source_ids.append(label[word_idx])
+                    previous_word_idx = word_idx
+                else:
+                    source_ids.append(-100)
+            
+            
+            # only use source 
+            if 'slots_label' in tokenized_source:
+                tokenized_source['slots_label'].append(source_ids)
+            else:
+                tokenized_source['slots_label'] = [source_ids]
+
+        # Pad the inputs
+        pad_tok_inputs = self.tokenizer.pad(
+            tokenized_source,
+            padding=self.padding,
+            max_length=self.max_length,
+            pad_to_multiple_of=self.pad_to_multiple_of
+        )
+        pad_tok_inputs_target = self.tokenizer.pad(
+            tokenized_target,
+            padding=self.padding,
+            max_length=self.max_length,
+            pad_to_multiple_of=self.pad_to_multiple_of
+        )
+
+        # Pad the slot labels
+        pad_tok_inputs["source"] = pad_tok_inputs["input_ids"]
+        pad_tok_inputs["target"] = pad_tok_inputs_target["input_ids"]
+        del pad_tok_inputs["input_ids"]
+
+        sequence_length = torch.tensor(pad_tok_inputs["source"]).shape[1]
+        padding_side = self.tokenizer.padding_side
+        if padding_side == "right":
+            pad_tok_inputs['slots_label'] = [
+                list(label) + [-100] * (sequence_length - len(label)) \
+                               for label in pad_tok_inputs['slots_label']
+            ]
+        else:
+            pad_tok_inputs['slots_label'] = [
+                [-100] * (sequence_length - len(label)) + list(label) \
+                 for label in pad_tok_inputs['slots_label']
+            ]
+
+        # Add in the intent labels
+        pad_tok_inputs["intent_label"] = [item['intent_num'] for item in batch]
+        
+        order_of_key = ["source", "target", "slots_label", "intent_label", "attention_mask"]
+        # order_of_key = ["source", "slots_label", "intent_label", "attention_mask"]
+
+        # Convert to PyTorch tensors
+        return {k: torch.tensor(pad_tok_inputs[k], dtype=torch.int64) for k in order_of_key}
+
 class CollatorMASSIVEIntentClassSlotFill:
     """
     Data collator for the MASSIVE intent classification and slot tasks
@@ -101,6 +217,7 @@ class CollatorMASSIVEIntentClassSlotFill:
                 else:
                     label_ids.append(-100)
 
+
             if 'slots_num' in tokenized_inputs:
                 tokenized_inputs['slots_num'].append(label_ids)
             else:
@@ -133,10 +250,6 @@ class CollatorMASSIVEIntentClassSlotFill:
 
         # Convert to PyTorch tensors
         return {k: torch.tensor(v, dtype=torch.int64) for k, v in pad_tok_inputs.items()}
-
-
-
-
 
 # compute metrics
 def create_compute_metrics(intent_labels = None, slot_labels = None, ignore_labels=None,
@@ -473,108 +586,4 @@ def output_predictions(outputs, intent_labels, slot_labels, conf, tokenizer=None
     return final_outputs
 
 
-# checkpoint
-def save_checkpoint(model, optimizer, epoch, args, loader_name = None):
-    if loader_name is None:
-        checkpoint_path = f'{args.save_dir}/trained_{args.label}_checkpoint.pth'
-        torch.save({
-            'epoch': epoch,
-            'model_state_dict': model.state_dict(),
-            'optimizer_state_dict': optimizer.state_dict(),
-        }, checkpoint_path)
-    else:
-        checkpoint_path = f'{args.save_dir}/trained_{args.label}_{loader_name}_checkpoint.pth'
-        torch.save({
-            'epoch': epoch,
-            'model_state_dict': model.state_dict(),
-            'optimizer_state_dict': optimizer.state_dict(),
-        }, checkpoint_path)
-
-    
-def load_checkpoint(model, optimizer, args, loader_name = None):
-    if loader_name is None:
-        checkpoint_path = f'{args.save_dir}/trained_{args.label}_checkpoint.pth'
-        if os.path.exists(checkpoint_path):
-            checkpoint = torch.load(checkpoint_path)
-            model.load_state_dict(checkpoint['model_state_dict'])
-            optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-            epoch = checkpoint['epoch']
-            print(f"Checkpoint found. Resuming training from epoch {epoch}.")
-            return model, optimizer, epoch
-        else:
-            return model, optimizer, 0, 0
-    else:
-        checkpoint_path = f'{args.save_dir}/trained_{args.label}_{loader_name}_checkpoint.pth'
-        if os.path.exists(checkpoint_path):
-            checkpoint = torch.load(checkpoint_path)
-            model.load_state_dict(checkpoint['model_state_dict'])
-            optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-            epoch = checkpoint['epoch']
-            print(f"Checkpoint found. Resuming training from epoch {epoch}.")
-            return model, optimizer, epoch
-        else:
-            return model, optimizer, 0
         
-
-def prepare_train_dev_datasets(conf, tokenizer, seed=random_seed):
-    """
-    Prepare the training and dev datasets based on the config.
-
-    :param conf: The MASSIVE configuration object
-    :type conf: massive.Configuration
-    :param tokenizer: The loaded tokenizer
-    :type tokenizer: PreTrainedTokenizerFast
-    :return: train set, dev set, an intent dictionary, a slot dictionary
-    :rtype: tuple(Dataset, Dataset, dict, dict)
-    """
-
-    train = datasets.load_from_disk(conf.get('train_val.train_dataset'))
-    train = train.shuffle(seed=seed)
-
-    # Filter to specific train locales
-    train_locales = conf.get('train_val.train_locales', default='all')
-    if train_locales != 'all' and train_locales != ['all']:
-        logger.info(f"Filtering train dataset to locale(s): {train_locales}")
-        if type(train_locales) == str:
-            train_locales = [train_locales]
-        train = train.filter(lambda x: x['locale'] in train_locales)
-
-    logger.info(f"The features of the train dataset: {train.features}")
-    logger.info(f"Length of the train dataset: {len(train)}")
-
-    dev = datasets.load_from_disk(conf.get('train_val.dev_dataset'))
-
-    # Filter to specific dev locales
-    dev_locales = conf.get('train_val.dev_locales', default='all')
-    if dev_locales != 'all' and dev_locales != ['all']:
-        logger.info(f"Filtering dev dataset to locale(s): {dev_locales}")
-        if type(dev_locales) == str:
-            dev_locales = [dev_locales]
-        dev = dev.filter(lambda x: x['locale'] in dev_locales)
-
-    # Remove specified locales in the dev set
-    dev_locales_remove = conf.get('train_val.dev_locales_remove', default='none')
-    if dev_locales_remove != 'none' and dev_locales_remove != ['none']:
-        logger.info(f"Removing locale(s) from dev dataset: {dev_locales_remove}")
-        if type(dev_locales_remove) == str:
-            dev_locales_remove = [dev_locales_remove]
-        dev = dev.filter(lambda x: x['locale'] not in dev_locales_remove)
-
-    # Shuffle the dev set
-    dev = dev.shuffle(seed=seed)
-
-    # Shorten the dev set to the first N examples if desired
-    if conf.get('train_val.dev_shorten_to', None):
-        dev = dev.select(range(conf.get('train_val.dev_shorten_to')))
-
-    # Load the intent and slot labels
-    with open(conf.get('train_val.intent_labels'), 'r') as i:
-        intent_labels = json.load(i)
-    with open(conf.get('train_val.slot_labels'), 'r') as s:
-        slot_labels = json.load(s)
-
-    logger.info(f"The features of the train dataset: {train.features}")
-    logger.info(f"Length of the train dataset: {len(train)}")
-    logger.info(f"Length of the loaded dev dataset: {len(dev)}")
-
-    return train, dev, intent_labels, slot_labels

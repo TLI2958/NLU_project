@@ -7,25 +7,8 @@
 # https://github.com/alexa/massive/blob/main/src/massive/utils/
 
 
-from collections import namedtuple
-import os
-from tqdm import tqdm
-import numpy as np
-import random
-import argparse
-import warnings
-
-import torch 
-import torch.nn as nn
-import torch.nn.functional as F
-from torch.utils.data import DataLoader
-
-
-from transformers import AutoTokenizer, XLMRobertaModel
-from datasets import load_dataset
-import evaluate
-
-from massive_utils import *
+from utils import *
+from soft_align_class import *
 
 random_seed = 1012
 warnings.filterwarnings('ignore')
@@ -44,100 +27,49 @@ def seed_everything(seed=random_seed):
     torch.backends.cudnn.benchmark = True
 
 
-class MultiTaskICSL(nn.Module):
-    """Model for IC/SL task.
+# checkpoint
+def save_checkpoint(model, optimizer, epoch, args, loader_name = None):
+    if loader_name is None:
+        checkpoint_path = f'{args.save_dir}/trained_{args.label}_checkpoint.pth'
+        torch.save({
+            'epoch': epoch,
+            'model_state_dict': model.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict(),
+        }, checkpoint_path)
+    else:
+        checkpoint_path = f'{args.save_dir}/trained_{args.label}_{loader_name}_checkpoint.pth'
+        torch.save({
+            'epoch': epoch,
+            'model_state_dict': model.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict(),
+        }, checkpoint_path)
 
-    The model feeds token ids into XLM-RoBERTa to get the sequence
-    representations, then apply two dense layers for IC/SL task.
-    """
+    
+def load_checkpoint(model, optimizer, args, loader_name = 'labeled'):
+    if loader_name is None:
+        checkpoint_path = f'{args.save_dir}/trained_{args.label}_{loader_name}_checkpoint.pth'
+        if os.path.exists(checkpoint_path):
+            checkpoint = torch.load(checkpoint_path)
+            model.load_state_dict(checkpoint['model_state_dict'])
+            optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+            epoch = checkpoint['epoch']
+            print(f"Checkpoint found. Resuming training from epoch {epoch}.")
+            return model, optimizer, epoch
+        else:
+            return model, optimizer, 0, 0
+    else:
+        checkpoint_path = f'{args.save_dir}/trained_{args.label}_{loader_name}_checkpoint.pth'
+        if os.path.exists(checkpoint_path):
+            checkpoint = torch.load(checkpoint_path)
+            model.load_state_dict(checkpoint['model_state_dict'])
+            optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+            epoch = checkpoint['epoch']
+            print(f"Checkpoint found. Resuming training from epoch {epoch}.")
+            return model, optimizer, epoch
+        else:
+            return model, optimizer, 0
 
-    def __init__(self, base_model, vocab_size, num_slot_labels, num_intents, hidden_size=768, 
-                 dropout=.1, prefix=None, params=None):
-        super(MultiTaskICSL, self).__init__(prefix=prefix, params=params)
-        self.base_model = base_model
-        with self.name_scope():
-            self.dropout = nn.Dropout(rate=dropout)
-            # IC/SL classifier
-            self.slot_classifier = nn.Linear(hidden_size,
-                                             num_slot_labels,)
-            self.intent_classifier = nn.Linear(hidden_size,
-                                               num_intents,)
-            # LM output layer: reconstruction of the source
-            self.embedding_weight = self.base_model.get_input_embeddings().weight
 
-            self.lm_output_layer = nn.Linear(hidden_size,
-                                             vocab_size,    
-                                             bias=False)
-            self.lm_output_layer.weight = self.embedding_weight # weight tying
-
-            self.attention_layer = nn.MultiheadAttention(embed_dim=hidden_size, num_heads=1,
-                                                                           dropout = 0.02)
-            self.ffn_layer = nn.Sequential(nn.LayerNorm(hidden_size),
-                                            nn.Linear(hidden_size, hidden_size),
-                                            nn.Dropout(.02),
-                                            nn.Linear(hidden_size, hidden_size*2),)
-   
-
-    def encode(self, inputs, attn_mask = None):
-        encoded = self.base_model(input_ids = inputs, attention_mask = attn_mask)
-        encoded = self.dropout(encoded.last_hidden_state)
-        return encoded
-
-    def forward(self, inputs, attn_mask = None): 
-        """Generate logits given input sequences.
-        
-        Parameters
-        ----------
-        inputs : (batch_size, seq_length)
-            Input words for the sequences.
-        attn_mask : (batch_size, seq_length)
-            To mask the padded tokens.
-
-        Returns
-        -------
-        intent_prediction: (batch_size, num_intents)
-        slot_prediction : (batch_size, seq_length, num_slot_labels)
-        """
-        hidden = self.encode(input_ids = inputs, attention_mask = attn_mask)
-        
-        intent_prediction = self.intent_classifier(hidden[:, 0, :])
-        slot_prediction = self.slot_classifier(hidden[:, 1:, :])
-        return intent_prediction, slot_prediction
-
-    def translate_and_predict(self, source, target, source_attn_mask = None):
-        """Generate logits given input sequences.
-
-        Parameters
-        ----------
-        source : (batch_size, src_seq_length)
-            Input words for the source sequences.
-        target : (batch_size, tgt_seq_length)
-            Input words for the target sequences.
-        attn_mask: (batch_size, src_seq_length)  
-
-        Returns
-        -------
-        translation : 
-            Shape (batch_size, tgt_seq_length, vocab_size)
-        intent_prediction: 
-            Shape (batch_size, num_intents)
-        slot_prediction :
-            Shape (batch_size, tgt_seq_length, num_slot_labels)
-        """
-
-        src_encoded = self.encode(source, source_attn_mask)
-        tgt_embed = self.base_model.embedding(target)
-
-        attn_output, _ = self.attention_layer(tgt_embed, src_encoded, source_attn_mask)
-        decoded = self.ffn_layer(attn_output)
-
-        # source reconstruction 
-        translation = self.lm_output_layer(decoded[:, 1:, :])
-
-        # IC and SL
-        intent_prediction = self.intent_classifier(src_encoded[:, 0, :])
-        slot_prediction = self.slot_classifier(attn_output[:, 1:, :])
-        return translation, intent_prediction, slot_prediction
 
 def train(train_dataloader, para_dataloader):
     vocab = tokenizer.get_vocab()
@@ -145,12 +77,11 @@ def train(train_dataloader, para_dataloader):
     # num_slot_labels & num_intents: according to https://arxiv.org/pdf/2204.08582
     
     model = MultiTaskICSL(base_model, vocab_size, num_slot_labels=55, num_intents=60) 
+    optimizer = Adam(model.parameters(), lr= args.lr)
+
     model, optimizer, start_epoch = load_checkpoint(model, optimizer, args)
 
     model.to(device)
-
-    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
-
     ic_loss_fn = nn.CrossEntropyLoss(reduction='mean')
     sl_loss_fn = nn.CrossEntropyLoss(reduction='mean')
     mt_loss_fn = nn.CrossEntropyLoss(reduction='mean')
@@ -158,7 +89,7 @@ def train(train_dataloader, para_dataloader):
     paral_size = len(para_dataloader)
     label_size = len(train_dataloader)
 
-    #Eval = namedtuple('Eval', ['predictions', 'label_ids'])
+    Eval = namedtuple('Eval', ['predictions', 'label_ids'])
 
     pbar = tqdm(range(max(1, start_epoch + 1), args.num_epochs + 1))
     model.train()
@@ -173,7 +104,7 @@ def train(train_dataloader, para_dataloader):
         slot_labels = []
         
         # train on parallel data
-        for i, para_batch in tqdm(enumerate(para_dataloader), 
+        for para_batch in tqdm(para_dataloader, 
                                   total=len(para_dataloader)):
             source, target, slot_label, intent_label, source_attn_mask = para_batch
             source, target, slot_label, intent_label, source_attn_mask = (source.to(device), 
@@ -183,10 +114,10 @@ def train(train_dataloader, para_dataloader):
             
             translation, intent_pred, slot_pred = model.translate_and_predict(source, 
                                                                               target, source_attn_mask)
-            intent_preds.append(intent_pred)
-            slot_preds.append(slot_pred)
-            intent_labels.append(intent_label)
-            slot_labels.append(slot_label)
+            intent_preds.append(intent_pred.detach().to('cpu'))
+            slot_preds.append(slot_pred.detach().to('cpu'))
+            intent_labels.append(intent_label.detach().to('cpu'))
+            slot_labels.append(slot_label.detach().to('cpu'))
 
             ic_loss = ic_loss_fn(intent_pred, intent_label)
             sl_loss = sl_loss_fn(slot_pred.transpose(1,2), slot_label)
@@ -200,7 +131,7 @@ def train(train_dataloader, para_dataloader):
             mt_loss += mce_loss.item()
         
 
-        save_checkpoint(model, optimizer, epoch, args, load_dataset = 'parallel')
+        save_checkpoint(model, optimizer, epoch, args, loader_name = 'parallel')
         
         predictions = (torch.cat(intent_preds), torch.cat(slot_preds))
         label_ids = (torch.cat(intent_labels), torch.cat(slot_labels))
@@ -210,7 +141,7 @@ def train(train_dataloader, para_dataloader):
             res = compute_metrics(eval_data)
         print('training on parallel data...')
         pbar.set_postfix({'dataset': 'parallel',
-                        'train_loss': loss.item() / paral_size , 
+                        'train_loss': (icsl_loss + mt_loss) / paral_size , 
                           'icsl_loss': icsl_loss / paral_size,
                           'mt_loss': mt_loss / (paral_size ),
                           'intent_acc': res['intent_acc'],
@@ -225,7 +156,7 @@ def train(train_dataloader, para_dataloader):
         slot_labels = []
 
 
-        for i, batch in tqdm(enumerate(train_dataloader), 
+        for batch in tqdm(train_dataloader, 
                              total=len(train_dataloader)):
             inputs, slot_label, intent_label, attn_mask = batch
             inputs, slot_label, intent_label, attn_mask = (inputs.to(device), slot_label.to(device), 
@@ -239,14 +170,13 @@ def train(train_dataloader, para_dataloader):
             optimizer.step()
             step_loss += loss.item()
 
-            intent_preds.append(intent_pred)
-            slot_preds.append(slot_pred)
-            intent_labels.append(intent_label)
-            slot_labels.append(slot_label)
+            intent_preds.append(intent_pred.detach().to('cpu'))
+            slot_preds.append(slot_pred.detach().to('cpu'))
+            intent_labels.append(intent_label.detach().to('cpu'))
+            slot_labels.append(slot_label.detach().to('cpu'))
 
 
-            if i%200 == 0:
-                save_checkpoint(model, optimizer, epoch, i, args, load_dataset = 'labeled')        
+        save_checkpoint(model, optimizer, epoch, args, loader_name = 'labeled')        
 
         predictions = (torch.cat(intent_preds), torch.cat(slot_preds))
         label_ids = (torch.cat(intent_labels), torch.cat(slot_labels))
@@ -279,7 +209,7 @@ def evaluate(model, eval_dataloader):
     slot_preds = []
     intent_labels = []
     slot_labels = []
-    #output_to_eval = namedtuple('Eval', ['predictions', 'label_ids'])
+    Eval = namedtuple('Eval', ['predictions', 'label_ids'])
 
     eval_size = len(eval_dataloader)    
 
@@ -287,21 +217,19 @@ def evaluate(model, eval_dataloader):
     model.eval()
     with torch.no_grad():
         step_loss = 0
-        for i, batch in tqdm(enumerate(eval_dataloader), 
-                                total=len(eval_dataloader)):
-            inputs, slot_label, intent_label, attn_mask = batch
-            inputs, slot_label, intent_label, attn_mask = (inputs.to(device), slot_label.to(device), 
-                                                            intent_label.to(device), attn_mask.to(device))
+        for batch in tqdm(eval_dataloaders, total=len(eval_dataloader)):
+            inputs, slot_label, intent_label, attn_mask = map(lambda x: x.to(device), batch)
+
             intent_pred, slot_pred = model(inputs, attn_mask)
             ic_loss = ic_loss_fn(intent_pred, intent_label)
             sl_loss = sl_loss_fn(slot_pred, slot_label)
             loss = ic_loss + sl_loss
             step_loss += loss.item()
 
-            intent_preds.append(intent_pred)
-            slot_preds.append(slot_pred)
-            intent_labels.append(intent_label)
-            slot_labels.append(slot_label)     
+            intent_preds.append(intent_pred.detach().to('cpu'))
+            slot_preds.append(slot_pred.detach().to('cpu'))
+            intent_labels.append(intent_label.detach().to('cpu'))
+            slot_labels.append(slot_label.detach().to('cpu'))
 
         predictions = (torch.cat(intent_preds), torch.cat(slot_preds))
         label_ids = (torch.cat(intent_labels), torch.cat(slot_labels))
@@ -333,6 +261,7 @@ if __name__ == "__main__":
     parser.add_argument("--save_dir", type = str, default = '/scratch/' + os.environ.get("USER", "") + '/out/')
     parser.add_argument("--model_dir", type=str, default="./out")
     parser.add_argument("--lr", type=float, default=1e-5)
+    parser.add_argument("--label", type=str, default="ICSL")
     parser.add_argument("--num_epochs", type=int, default=20)
     parser.add_argument("--batch_size", type=int, default=32)
 
@@ -343,6 +272,30 @@ if __name__ == "__main__":
     tokenizer = AutoTokenizer.from_pretrained(args.checkpoint)
     Eval = namedtuple('Eval', ['predictions', 'label_ids'])
 
+    en_train = Dataset.from_file(os.getcwd + 'data_en/en.train/data-00000-of-00001.arrow')
+    zh_train = Dataset.from_file(os.getcwd + 'data_zh/zh.train/data-00000-of-00001.arrow')
+        
+    zh_val = Dataset.from_file('data_zh/zh.dev/data-00000-of-00001.arrow')
+    para_dataset = deepcopy(en_train)
+    para_dataset = para_dataset.add_column("target_utt", zh_train['utt'])
+
+    tokenizer = AutoTokenizer.from_pretrained('facebookAI/xlm-roberta-base')
+    batch_size = 32
+    para_dataloader = DataLoader(para_dataset, batch_size=batch_size, shuffle=True, 
+                                collate_fn=CollatorMASSIVEIntentClassSlotFill_para(tokenizer=tokenizer, max_length=512))
+    train_dataloader = DataLoader(en_train, batch_size=batch_size, shuffle=True, 
+                                collate_fn=CollatorMASSIVEIntentClassSlotFill(tokenizer=tokenizer, max_length=512))
+    eval_dataloader = DataLoader(zh_val, batch_size=batch_size, shuffle=True,
+                                    collate_fn=CollatorMASSIVEIntentClassSlotFill(tokenizer=tokenizer, max_length=512))
+    if args.train:
+        train(train_dataloader, para_dataloader)
+    if args.eval:
+        vocab = tokenizer.get_vocab()
+        vocab_size = len(vocab)
+        model = MultiTaskICSL(base_model, vocab_size, num_slot_labels=55, num_intents=60)
+        optimizer = Adam(model.parameters(), lr= args.lr)
+        model, optimizer, start_epoch = load_checkpoint(model, optimizer, args, loader_name='labeled')
+        evaluate(model, eval_dataloader)
     
     
 
