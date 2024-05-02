@@ -41,6 +41,8 @@ import json
 import numpy as np
 import sklearn.metrics as sklm
 from seqeval.metrics import f1_score
+import pickle 
+
 from math import sqrt
 import warnings
 import sklearn.exceptions
@@ -255,7 +257,7 @@ class CollatorMASSIVEIntentClassSlotFill:
 
 # compute metrics
 def create_compute_metrics(intent_labels = None, slot_labels = None, ignore_labels=None,
-                           metrics='all'):
+                           metrics='all', para = True):
     """
     Create a `compute_metrics` function for this task
 
@@ -287,8 +289,9 @@ def create_compute_metrics(intent_labels = None, slot_labels = None, ignore_labe
         intent_label_tuple = p.label_ids[0]
         slot_label_tuple = p.label_ids[1]
 
-        intent_preds_am = [torch.argmax(x) for x in intent_preds]
-        slot_preds_am = [torch.argmax(x, axis=1) for x in slot_preds]
+        intent_preds_am = [torch.argmax(x, axis = -1) for x in intent_preds]
+        slot_preds_am = [torch.argmax(x, axis=-1) for x in slot_preds]
+
 
         # merge -100, which we used for the subsequent subwords in a full word after tokenizing
         labels_merge = [-100]
@@ -301,13 +304,14 @@ def create_compute_metrics(intent_labels = None, slot_labels = None, ignore_labe
                 eval_metrics=metrics,
                 labels_merge=labels_merge,
                 labels_ignore=ignore_num_lab,
-                pad='Other'
+                pad='Other',
+                para = para
             )
     return compute_metrics
 
 # eval function: 
 def eval_preds(pred_intents=None, lab_intents=None, pred_slots=None, lab_slots=None,
-               eval_metrics='all', labels_ignore='Other', labels_merge=None, pad='Other'):
+               eval_metrics='all', labels_ignore='Other', labels_merge=None, pad='Other', para = True):
     """
     Function to evaluate the predictions from a model
 
@@ -337,7 +341,9 @@ def eval_preds(pred_intents=None, lab_intents=None, pred_slots=None, lab_slots=N
         assert len(pred_intents) == len(lab_intents),"pred_intents and lab_intents must be same len"
     if pred_slots is not None and lab_slots is not None:
         assert len(pred_slots) == len(lab_slots), "pred_slots and lab_slots must be same length"
-
+    if para:
+        pred_intents, pred_slots = convert_para(pred_intents, pred_slots)
+        
     if ('intent_acc' in eval_metrics) or ('all' in eval_metrics):
         intent_acc = sklm.accuracy_score(lab_intents, pred_intents)
         results['intent_acc'] = intent_acc
@@ -347,14 +353,15 @@ def eval_preds(pred_intents=None, lab_intents=None, pred_slots=None, lab_slots=N
     if lab_slots is not None and pred_slots is not None:
         bio_slot_labels, bio_slot_preds = [], []
         for lab, pred in zip(lab_slots, pred_slots):
-
+            pred = list(pred)
+            print(pred)
             # Pad or truncate prediction as needed using `pad` arg
             if type(pred) == list:
                 pred = pred[:len(lab)] + [pad]*(len(lab) - len(pred))
 
             # Fix for Issue 21 -- subwords after the first one from a word should be ignored
             for i, x in enumerate(lab):
-                if x == -100 and i < len(pred):
+                if x == -100:
                     pred[i] = -100
 
             # convert to BIO
@@ -364,6 +371,14 @@ def eval_preds(pred_intents=None, lab_intents=None, pred_slots=None, lab_slots=N
             bio_slot_preds.append(
                 convert_to_bio(pred, outside=labels_ignore, labels_merge=labels_merge)
             )
+        
+        # with open('bio_slot_labels.pkl', 'wb') as f:
+        #     pickle.dump(bio_slot_labels, f)
+
+        # with open('bio_slot_preds.pkl', 'wb') as f:
+        #     pickle.dump(bio_slot_preds, f)
+            
+    print('finish conversion to bio...')
 
     if ('slot_micro_f1' in eval_metrics) or ('all' in eval_metrics):
 
@@ -585,4 +600,28 @@ def output_predictions(outputs, intent_labels, slot_labels, conf, tokenizer=None
     return final_outputs
 
 
-        
+def convert_para(pred_intents, pred_slots):
+    with open(os.getcwd() + '/data_en/en.intents', 'r', encoding = 'UTF-8') as file:
+        intent_labels_map = json.load(file)
+    
+    with open(os.getcwd() + '/data_en/en.slots', 'r', encoding = 'UTF-8') as file:
+        slot_labels_map = json.load(file)
+    
+    with open(os.getcwd() + '/data_zh/zh.intents', 'r', encoding = 'UTF-8') as file:
+        zh_intent_labels_map = json.load(file)
+    
+    with open(os.getcwd() + '/data_zh/zh.slots', 'r', encoding = 'UTF-8') as file:
+        zh_slot_labels_map =json.load(file)
+    
+    label_to_pred_idx = {v: k for k, v in zh_intent_labels_map.items()}
+    conversion_intent_map = {idx: int(label_to_pred_idx[label]) for idx, label in intent_labels_map.items()}
+    
+    label_to_pred_idx = {v: k for k, v in zh_slot_labels_map.items()}
+    conversion_slot_map = {idx: int(label_to_pred_idx[label]) for idx, label in slot_labels_map.items()}
+    
+     
+    converted_intent_preds = [torch.tensor(conversion_intent_map[str(p.item())]) for p in pred_intents]  # Use get to handle missing keys
+    converted_slot_preds = [torch.tensor([conversion_slot_map[str(s.item())] for s in slot_seq]) for slot_seq in pred_slots]
+    slot_tensor = torch.stack(converted_slot_preds) 
+    intent_tensor = torch.stack(converted_intent_preds)
+    return intent_tensor, slot_tensor

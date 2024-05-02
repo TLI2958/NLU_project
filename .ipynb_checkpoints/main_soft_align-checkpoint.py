@@ -1,4 +1,4 @@
-# modified from soft-align implementation in multiatis: 
+# heavily modified from soft-align implementation in multiatis: 
 # https://github.com/amazon-science/multiatis/blob/main/code/scripts/bert_soft_align.py
 # implementation of soft-align in paper: https://arxiv.org/pdf/2004.14353
 # original code is in mxnet, this is a port to pytorch + transformers
@@ -6,10 +6,10 @@
 # also from MASSIVE utils:
 # https://github.com/alexa/massive/blob/main/src/massive/utils/
 
-
 from utils import *
 from soft_align_class import *
 from torch.cuda.amp import autocast, GradScaler
+import pickle
 
 def seed_everything(seed=random_seed):
     os.environ['PYTHONHASHSEED'] = str(seed)
@@ -79,8 +79,6 @@ def train(model, optimizer, train_dataloader, para_dataloader):
     paral_size = len(para_dataloader)
     label_size = len(train_dataloader)
 
-    Eval = namedtuple('Eval', ['predictions', 'label_ids'])
-
     pbar = tqdm(range(max(1, start_epoch + 1), args.num_epochs + 1))
     model.train()
     scaler = GradScaler()
@@ -103,10 +101,12 @@ def train(model, optimizer, train_dataloader, para_dataloader):
                                                                          source_attn_mask.to(device))
             
             translation, intent_pred, slot_pred = model.translate_and_predict(source, 
-                                                                              target, source_attn_mask = attention_mask)
-            intent_preds.append(intent_pred.detach().to('cpu'))
-            slot_preds.append(slot_pred.detach().to('cpu'))
-            intent_labels.append(intent_label.detach().to('cpu'))
+                                                                              target, 
+                                                                              source_attn_mask = source_attn_mask)
+            
+            intent_preds.append(intent_pred.to('cpu'))
+            slot_preds.append(slot_pred.to('cpu'))
+            intent_labels.append(intent_label.to('cpu'))
             slot_labels.append(slot_label.detach().to('cpu'))
 
             ic_loss = ic_loss_fn(intent_pred, intent_label)
@@ -127,18 +127,26 @@ def train(model, optimizer, train_dataloader, para_dataloader):
         predictions = (torch.cat(intent_preds), torch.cat(slot_preds))
         label_ids = (torch.cat(intent_labels), torch.cat(slot_labels))
         eval_data = Eval(predictions=predictions, label_ids=label_ids)
-            compute_metrics = create_compute_metrics(intent_labels = intent_labels_map, 
-                                                 slot_labels= slot_labels_map, metrics = 'all')
-        with torch.no_grad():
-            res = compute_metrics(eval_data)
-        print('training on parallel data...')
+
+        eval_ = {'predictions': (torch.cat(intent_preds), torch.cat(slot_preds)),
+                     'label_ids': (torch.cat(intent_labels), torch.cat(slot_labels))}
+        
+        with open(os.path.join(os.getcwd(), 'para.pkl'), 'wb') as f:
+            pickle.dump(eval_, f)
+            
+        # eval on zh
+        # compute_metrics = create_compute_metrics(intent_labels = zh_intent_labels_map, 
+        #                                          slot_labels= zh_slot_labels_map, metrics = 'all')
+        # with torch.no_grad():
+        #     res = compute_metrics(eval_data)
+        # print('training on parallel data...')
         pbar.set_postfix({'dataset': 'parallel',
                         'train_loss': (icsl_loss + mt_loss) / paral_size , 
                           'icsl_loss': icsl_loss / paral_size,
-                          'mt_loss': mt_loss / (paral_size ),
-                          'intent_acc': res['intent_acc'],
-                          'slot_f1': res['slot_f1'],
-                          'ex_match_acc': res['ex_match_acc']})
+                          'mt_loss': mt_loss / paral_size,})
+                          # 'intent_acc': res['intent_acc'],
+                          # 'slot_f1': res['slot_micro_f1'],
+                          # 'ex_match_acc': res['ex_match_acc']})
         
 
         # train on labeled data
@@ -175,22 +183,29 @@ def train(model, optimizer, train_dataloader, para_dataloader):
         predictions = (torch.cat(intent_preds), torch.cat(slot_preds))
         label_ids = (torch.cat(intent_labels), torch.cat(slot_labels))
         eval_data = Eval(predictions=predictions, label_ids=label_ids)
-        with open('eval_data.pkl', 'wb') as f:
-            pickle.dump(eval_data, f)
-            
-        with torch.no_grad():
-            compute_metrics = create_compute_metrics(intent_labels = intent_labels_map, 
-                                                 slot_labels= slot_labels_map, metrics = 'all')
-        res = compute_metrics(eval_data)
-        print('training on labeled data only...')
-        pbar.set_postfix({'dataset': 'labeled',
-                          'train_loss': loss.item() / (label_size),
-                          'intent_acc': res['intent_acc'],
-                          'slot_f1': res['slot_f1'],
-                          'ex_match_acc': res['ex_match_acc']})
+
+        eval_ = {'predictions': (torch.cat(intent_preds), torch.cat(slot_preds)),
+                     'label_ids': (torch.cat(intent_labels), torch.cat(slot_labels))}
         
-        with open(os.path.join(args.save_dir, 'train.log'), 'a') as f:
-            f.write(f'epoch: {epoch}\ticsl_loss: {icsl_loss / paral_size}\tmt_loss: {mt_loss / paral_size}\tstep_loss: {step_loss / label_size}\n\nintent_acc: {res["intent_acc"]}\tslot_f1: {res["slot_f1"]}\tex_match_acc: {res["ex_match_acc"]}\n')
+        with open(os.path.join(os.getcwd(), 'labeled.pkl'), 'wb') as f:
+            pickle.dump(eval_, f)
+            
+            
+        # with torch.no_grad():
+        #     # english only
+        #     compute_metrics = create_compute_metrics(intent_labels = intent_labels_map, 
+        #                                          slot_labels= slot_labels_map, metrics = 'all',
+        #                                             para = False)
+        # res = compute_metrics(eval_data)
+        # print('training on labeled data only...')
+        pbar.set_postfix({'dataset': 'labeled',
+                          'train_loss': loss.item() / (label_size),})
+                          # 'intent_acc': res['intent_acc'],
+                          # 'slot_f1': res['slot_micro_f1'],
+                          # 'ex_match_acc': res['ex_match_acc']})
+        
+        with open(os.path.join(args.save_dir, 'train.log.pkl'), 'a') as f:
+            f.write(f'epoch: {epoch}\ticsl_loss: {icsl_loss / paral_size}\tmt_loss: {mt_loss / paral_size}\tstep_loss: {step_loss / label_size}\n\nintent_acc: {res["intent_acc"]}\tslot_f1: {res["slot_micro_f1"]}\tex_match_acc: {res["ex_match_acc"]}\n')
 
 
 
@@ -207,7 +222,6 @@ def evaluate(model, eval_dataloader):
     slot_preds = []
     intent_labels = []
     slot_labels = []
-    Eval = namedtuple('Eval', ['predictions', 'label_ids'])
 
     eval_size = len(eval_dataloader)    
 
@@ -217,38 +231,51 @@ def evaluate(model, eval_dataloader):
         step_loss = 0
         for batch in tqdm(eval_dataloader, total=len(eval_dataloader)):
             inputs, slot_label, intent_label, attn_mask = map(lambda x: x.to(device), batch.values())
-
+            print(attn_mask.shape)
+            break
+            # TODO: label remap 
             intent_pred, slot_pred = model(inputs, attn_mask)
             ic_loss = ic_loss_fn(intent_pred, intent_label)
             sl_loss = sl_loss_fn(slot_pred.transpose(1,2), slot_label[:,1:])
             loss = ic_loss + sl_loss
             step_loss += loss.item()
-
+            
             intent_preds.append(intent_pred.detach().to('cpu'))
             slot_preds.append(slot_pred.detach().to('cpu'))
             intent_labels.append(intent_label.detach().to('cpu'))
             slot_labels.append(slot_label.detach().to('cpu'))
 
+
         predictions = (torch.cat(intent_preds), torch.cat(slot_preds))
         label_ids = (torch.cat(intent_labels), torch.cat(slot_labels))
         eval_data = Eval(predictions=predictions, label_ids=label_ids)
-        compute_metrics = create_compute_metrics(intent_labels = intent_labels_map, 
-                                                 slot_labels = slot_labels_map,
+
+        
+        eval_log = {'predictions': (torch.cat(intent_preds), torch.cat(slot_preds)),
+                     'label_ids': (torch.cat(intent_labels), torch.cat(slot_labels))}
+
+        with open(os.path.join(os.getcwd(), 'eval.pkl'), 'wb') as f:
+            pickle.dump(eval_log, f)
+            
+        # eval on zh            
+        compute_metrics = create_compute_metrics(intent_labels = zh_intent_labels_map, 
+                                                 slot_labels = zh_slot_labels_map,
                                                  metrics ='all')
         res = compute_metrics(eval_data)
         average_loss = step_loss / eval_size
 
         print(f"Evaluate...\nEval Loss: {average_loss:.4f}\n"
             f"Intent Accuracy: {res['intent_acc']:.2f}\n"
-            f"Slot F1: {res['slot_f1']:.2f}\n"
+            f"Slot F1: {res['slot_micro_f1']:.2f}\n"
             f"Exact Match Accuracy: {res['ex_match_acc']:.2f}")
         # Logging to file
         log_message = (f"eval loss: {average_loss:.4f}, "
                     f"intent accuracy: {res['intent_acc']:.2f}, "
-                    f"slot f1: {res['slot_f1']:.2f}, "
+                    f"slot f1: {res['slot_micro_f1']:.2f}, "
                     f"exact match accuracy: {res['ex_match_acc']:.2f}\n")
-            
-        with open(os.path.join(args.save_dir, 'eval.log'), 'a') as f:
+        
+    
+        with open(args.save_dir + 'eval.log.pkl', 'a') as f:
             f.write(log_message)
 
 
@@ -292,12 +319,19 @@ if __name__ == "__main__":
                                     collate_fn=CollatorMASSIVEIntentClassSlotFill(tokenizer=tokenizer, max_length=512))
     vocab = tokenizer.get_vocab()
     vocab_size = len(vocab)
-    # load mappings 
-    with open(os.getcwd() + '/data_zh/zh.intents', 'r') as file:
+    # load mappings: should be using en mapping since order matters
+    with open(os.getcwd() + '/data_en/en.intents', 'r', encoding = 'UTF-8') as file:
         intent_labels_map = json.load(file)
     
-    with open(os.getcwd() + '/data_zh/zh.slots', 'r') as file:
+    with open(os.getcwd() + '/data_en/en.slots', 'r', encoding = 'UTF-8') as file:
         slot_labels_map = json.load(file)
+    
+    with open(os.getcwd() + '/data_zh/zh.intents', 'r', encoding = 'UTF-8') as file:
+        zh_intent_labels_map = json.load(file)
+    
+    with open(os.getcwd() + '/data_zh/zh.slots', 'r', encoding = 'UTF-8') as file:
+        zh_slot_labels_map =json.load(file)
+
         
     if args.train:
         # num_slot_labels & num_intents: according to https://arxiv.org/pdf/2204.08582
