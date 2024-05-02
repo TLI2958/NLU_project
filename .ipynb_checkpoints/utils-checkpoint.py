@@ -249,7 +249,9 @@ class CollatorMASSIVEIntentClassSlotFill:
         pad_tok_inputs["intent_num"] = [item['intent_num'] for item in batch]
 
         # Convert to PyTorch tensors
-        return {k: torch.tensor(v, dtype=torch.int64) for k, v in pad_tok_inputs.items()}
+        order_of_key = ["input_ids", "slots_num", "intent_num", "attention_mask"]
+        # Convert to PyTorch tensors
+        return {k: torch.tensor(pad_tok_inputs[k], dtype=torch.int64) for k in order_of_key}
 
 # compute metrics
 def create_compute_metrics(intent_labels = None, slot_labels = None, ignore_labels=None,
@@ -278,10 +280,7 @@ def create_compute_metrics(intent_labels = None, slot_labels = None, ignore_labe
     if type(metrics) != list:
         metrics = [metrics]
     def compute_metrics(p):
-
-        if type(metrics) != list:
-            metrics = [metrics]
-
+        
         intent_preds = p.predictions[0]
         slot_preds = p.predictions[1]
 
@@ -295,15 +294,15 @@ def create_compute_metrics(intent_labels = None, slot_labels = None, ignore_labe
         labels_merge = [-100]
 
         return eval_preds(
-            pred_intents=intent_preds_am,
-            lab_intents=intent_label_tuple,
-            pred_slots=slot_preds_am,
-            lab_slots=slot_label_tuple,
-            eval_metrics=metrics,
-            labels_merge=labels_merge,
-            ignore_labels=ignore_num_lab,
-            pad='Other'
-        )
+                pred_intents=intent_preds_am,
+                lab_intents=intent_label_tuple,
+                pred_slots=slot_preds_am,
+                lab_slots=slot_label_tuple,
+                eval_metrics=metrics,
+                labels_merge=labels_merge,
+                labels_ignore=ignore_num_lab,
+                pad='Other'
+            )
     return compute_metrics
 
 # eval function: 
@@ -355,7 +354,7 @@ def eval_preds(pred_intents=None, lab_intents=None, pred_slots=None, lab_slots=N
 
             # Fix for Issue 21 -- subwords after the first one from a word should be ignored
             for i, x in enumerate(lab):
-                if x == -100:
+                if x == -100 and i < len(pred):
                     pred[i] = -100
 
             # convert to BIO

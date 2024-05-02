@@ -9,6 +9,7 @@
 
 from utils import *
 from soft_align_class import *
+from torch.cuda.amp import autocast, GradScaler
 
 def seed_everything(seed=random_seed):
     os.environ['PYTHONHASHSEED'] = str(seed)
@@ -64,16 +65,11 @@ def load_checkpoint(model, optimizer, args, loader_name = 'labeled'):
 
 
 
-def train(train_dataloader, para_dataloader):
-    vocab = tokenizer.get_vocab()
-    vocab_size = len(vocab)
+def train(model, optimizer, train_dataloader, para_dataloader):
     # num_slot_labels & num_intents: according to https://arxiv.org/pdf/2204.08582
     # note 56 num_slot_labels! not 55!
     
-    model = MultiTaskICSL(base_model, vocab_size, num_slot_labels=56, num_intents=61) 
-    optimizer = Adam(model.parameters(), lr= args.lr)
-
-    model, optimizer, start_epoch = load_checkpoint(model, optimizer, args)
+    model, optimizer, start_epoch = load_checkpoint(model, optimizer, args, loader_name = 'parallel')
 
     model.to(device)
     ic_loss_fn = nn.CrossEntropyLoss(reduction='mean')
@@ -87,7 +83,7 @@ def train(train_dataloader, para_dataloader):
 
     pbar = tqdm(range(max(1, start_epoch + 1), args.num_epochs + 1))
     model.train()
-
+    scaler = GradScaler()
     for epoch in pbar:
         mt_loss, icsl_loss, step_loss = 0, 0, 0
         
@@ -105,9 +101,6 @@ def train(train_dataloader, para_dataloader):
                                                                          target.to(device), slot_label.to(device), 
                                                                          intent_label.to(device), 
                                                                          source_attn_mask.to(device))
-            attention_mask = source_attn_mask.to(dtype=torch.float32)
-            attention_mask = (1.0 - attention_mask) * -np.inf  # Convert 0s to -10000 (close to -inf)
-
             
             translation, intent_pred, slot_pred = model.translate_and_predict(source, 
                                                                               target, source_attn_mask = attention_mask)
@@ -130,11 +123,12 @@ def train(train_dataloader, para_dataloader):
         
 
         save_checkpoint(model, optimizer, epoch, args, loader_name = 'parallel')
-        
+        print('saved checkpoint...')
         predictions = (torch.cat(intent_preds), torch.cat(slot_preds))
         label_ids = (torch.cat(intent_labels), torch.cat(slot_labels))
         eval_data = Eval(predictions=predictions, label_ids=label_ids)
-        compute_metrics = create_compute_metrics()
+            compute_metrics = create_compute_metrics(intent_labels = intent_labels_map, 
+                                                 slot_labels= slot_labels_map, metrics = 'all')
         with torch.no_grad():
             res = compute_metrics(eval_data)
         print('training on parallel data...')
@@ -159,7 +153,7 @@ def train(train_dataloader, para_dataloader):
             inputs, slot_label, intent_label, attn_mask = batch.values()
             inputs, slot_label, intent_label, attn_mask = (inputs.to(device), slot_label.to(device), 
                                                            intent_label.to(device), attn_mask.to(device))
-
+            
             intent_pred, slot_pred = model(inputs, attn_mask)
             ic_loss = ic_loss_fn(intent_pred, intent_label)
             # slot_loss = sl_loss_fn(slot_pred.view(-1, slot_pred.size(-1)), slot_label.view(-1))
@@ -175,14 +169,18 @@ def train(train_dataloader, para_dataloader):
             intent_labels.append(intent_label.detach().to('cpu'))
             slot_labels.append(slot_label.detach().to('cpu'))
 
-
+        
         save_checkpoint(model, optimizer, epoch, args, loader_name = 'labeled')        
-
+        print('saved checkpoint...')
         predictions = (torch.cat(intent_preds), torch.cat(slot_preds))
         label_ids = (torch.cat(intent_labels), torch.cat(slot_labels))
         eval_data = Eval(predictions=predictions, label_ids=label_ids)
+        with open('eval_data.pkl', 'wb') as f:
+            pickle.dump(eval_data, f)
+            
         with torch.no_grad():
-            compute_metrics = create_compute_metrics()
+            compute_metrics = create_compute_metrics(intent_labels = intent_labels_map, 
+                                                 slot_labels= slot_labels_map, metrics = 'all')
         res = compute_metrics(eval_data)
         print('training on labeled data only...')
         pbar.set_postfix({'dataset': 'labeled',
@@ -217,12 +215,12 @@ def evaluate(model, eval_dataloader):
     model.eval()
     with torch.no_grad():
         step_loss = 0
-        for batch in tqdm(eval_dataloaders, total=len(eval_dataloader)):
-            inputs, slot_label, intent_label, attn_mask = map(lambda x: x.to(device), batch)
+        for batch in tqdm(eval_dataloader, total=len(eval_dataloader)):
+            inputs, slot_label, intent_label, attn_mask = map(lambda x: x.to(device), batch.values())
 
-            intent_pred, slot_pred = model(inputs, )
+            intent_pred, slot_pred = model(inputs, attn_mask)
             ic_loss = ic_loss_fn(intent_pred, intent_label)
-            sl_loss = sl_loss_fn(slot_pred, slot_label)
+            sl_loss = sl_loss_fn(slot_pred.transpose(1,2), slot_label[:,1:])
             loss = ic_loss + sl_loss
             step_loss += loss.item()
 
@@ -234,7 +232,9 @@ def evaluate(model, eval_dataloader):
         predictions = (torch.cat(intent_preds), torch.cat(slot_preds))
         label_ids = (torch.cat(intent_labels), torch.cat(slot_labels))
         eval_data = Eval(predictions=predictions, label_ids=label_ids)
-        compute_metrics = create_compute_metrics()
+        compute_metrics = create_compute_metrics(intent_labels = intent_labels_map, 
+                                                 slot_labels = slot_labels_map,
+                                                 metrics ='all')
         res = compute_metrics(eval_data)
         average_loss = step_loss / eval_size
 
@@ -290,12 +290,25 @@ if __name__ == "__main__":
                                 collate_fn=CollatorMASSIVEIntentClassSlotFill(tokenizer=tokenizer, max_length=512))
     eval_dataloader = DataLoader(zh_val, batch_size=args.batch_size, shuffle=True,
                                     collate_fn=CollatorMASSIVEIntentClassSlotFill(tokenizer=tokenizer, max_length=512))
+    vocab = tokenizer.get_vocab()
+    vocab_size = len(vocab)
+    # load mappings 
+    with open(os.getcwd() + '/data_zh/zh.intents', 'r') as file:
+        intent_labels_map = json.load(file)
+    
+    with open(os.getcwd() + '/data_zh/zh.slots', 'r') as file:
+        slot_labels_map = json.load(file)
+        
     if args.train:
-        train(train_dataloader, para_dataloader)
-    if args.eval:
-        vocab = tokenizer.get_vocab()
-        vocab_size = len(vocab)
+        # num_slot_labels & num_intents: according to https://arxiv.org/pdf/2204.08582
+        # note 56 num_slot_labels! not 55! Original paper was inaccurate.
         model = MultiTaskICSL(base_model, vocab_size, num_slot_labels=56, num_intents=60)
+        model = model.to(device)
+        optimizer = Adam(model.parameters(), lr = args.lr)
+        train(model, optimizer, train_dataloader, para_dataloader)
+    if args.eval:
+        model = MultiTaskICSL(base_model, vocab_size, num_slot_labels=56, num_intents=60)
+        model = model.to(device)
         optimizer = Adam(model.parameters(), lr= args.lr)
         model, optimizer, start_epoch = load_checkpoint(model, optimizer, args, loader_name='labeled')
         evaluate(model, eval_dataloader)

@@ -63,8 +63,9 @@ class MultiTaskICSL(nn.Module):
     def encode(self, inputs, attn_mask = None):
         if attn_mask is not None:
             attention_mask = attn_mask.to(dtype=torch.float32)
-
-        encoded = self.base_model(input_ids = inputs)
+        # XLM-RoBERTa: 0 if masked, 1 not, according to 
+        # https://huggingface.co/docs/transformers/en/model_doc/xlm-roberta#transformers.XLMRobertaModel.forward.attention_mask
+        encoded = self.base_model(inputs, attention_mask = attn_mask)
         encoded = self.dropout(encoded.last_hidden_state)
         return encoded
 
@@ -84,7 +85,7 @@ class MultiTaskICSL(nn.Module):
         slot_prediction : (batch_size, seq_length, num_slot_labels)
         """
         if attn_mask is not None:
-            hidden = self.encode(input_ids = inputs, attention_mask = attn_mask)
+            hidden = self.encode(inputs = inputs, attn_mask = attn_mask)
         
         intent_prediction = self.intent_classifier(hidden[:, 0, :])
         slot_prediction = self.slot_classifier(hidden[:, 1:, :])
@@ -118,6 +119,7 @@ class MultiTaskICSL(nn.Module):
             
         attn_output, _ = self.attention_layer(query = tgt_embed, key = src_encoded, value = src_encoded, 
                                              key_padding_mask = attention_mask.transpose(0,1))
+        # mxnet ref: https://nlp.gluon.ai/_modules/gluonnlp/model/attention_cell.html#AttentionCell
         attn_output_ = self.dropout(attn_output)
         attn_output_ = self.layerNorm(attn_output_)
         decoded = self.ffn_layer(attn_output_)
