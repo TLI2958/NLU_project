@@ -57,6 +57,7 @@ warnings.filterwarnings("ignore", category=sklearn.exceptions.UndefinedMetricWar
 random_seed = 1012
 
 torch.seed()
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # note: we are using the dataset: 
 # https://huggingface.co/datasets/AmazonScience/massive
@@ -341,8 +342,8 @@ def eval_preds(pred_intents=None, lab_intents=None, pred_slots=None, lab_slots=N
         assert len(pred_intents) == len(lab_intents),"pred_intents and lab_intents must be same len"
     if pred_slots is not None and lab_slots is not None:
         assert len(pred_slots) == len(lab_slots), "pred_slots and lab_slots must be same length"
-    if para:
-        pred_intents, pred_slots = convert_para(pred_intents, pred_slots)
+    # if para:
+    #     pred_intents, pred_slots = convert_para(pred_intents, pred_slots)
         
     if ('intent_acc' in eval_metrics) or ('all' in eval_metrics):
         intent_acc = sklm.accuracy_score(lab_intents, pred_intents)
@@ -371,6 +372,8 @@ def eval_preds(pred_intents=None, lab_intents=None, pred_slots=None, lab_slots=N
             bio_slot_preds.append(
                 convert_to_bio(pred, outside=labels_ignore, labels_merge=labels_merge)
             )
+            print(bio_slot_labels, bio_slot_preds)
+            break
         
         # with open('bio_slot_labels.pkl', 'wb') as f:
         #     pickle.dump(bio_slot_labels, f)
@@ -600,7 +603,34 @@ def output_predictions(outputs, intent_labels, slot_labels, conf, tokenizer=None
     return final_outputs
 
 
-def convert_para(pred_intents, pred_slots):
+# def convert_para(pred_intents, pred_slots):
+#     with open(os.getcwd() + '/data_en/en.intents', 'r', encoding = 'UTF-8') as file:
+#         intent_labels_map = json.load(file)
+    
+#     with open(os.getcwd() + '/data_en/en.slots', 'r', encoding = 'UTF-8') as file:
+#         slot_labels_map = json.load(file)
+    
+#     with open(os.getcwd() + '/data_zh/zh.intents', 'r', encoding = 'UTF-8') as file:
+#         zh_intent_labels_map = json.load(file)
+    
+#     with open(os.getcwd() + '/data_zh/zh.slots', 'r', encoding = 'UTF-8') as file:
+#         zh_slot_labels_map =json.load(file)
+    
+#     label_to_pred_idx = {v: k for k, v in zh_intent_labels_map.items()}
+#     conversion_intent_map = {idx: int(label_to_pred_idx[label]) for idx, label in intent_labels_map.items()}
+    
+#     label_to_pred_idx = {v: k for k, v in zh_slot_labels_map.items()}
+#     conversion_slot_map = {idx: int(label_to_pred_idx[label]) for idx, label in slot_labels_map.items()}
+    
+     
+#     converted_intent_preds = [torch.tensor(conversion_intent_map.get(str(p.item()),-100)) for p in pred_intents]  # Use get to handle missing keys
+#     converted_slot_preds = [torch.tensor([conversion_slot_map.get(str(s.item()), -100) for s in slot_seq]) for slot_seq in pred_slots]
+#     slot_tensor = torch.stack(converted_slot_preds) 
+#     intent_tensor = torch.stack(converted_intent_preds)
+#     return intent_tensor, slot_tensor
+
+
+def convert_eval(intent_labels, slot_labels):
     with open(os.getcwd() + '/data_en/en.intents', 'r', encoding = 'UTF-8') as file:
         intent_labels_map = json.load(file)
     
@@ -613,15 +643,14 @@ def convert_para(pred_intents, pred_slots):
     with open(os.getcwd() + '/data_zh/zh.slots', 'r', encoding = 'UTF-8') as file:
         zh_slot_labels_map =json.load(file)
     
-    label_to_pred_idx = {v: k for k, v in zh_intent_labels_map.items()}
-    conversion_intent_map = {idx: int(label_to_pred_idx[label]) for idx, label in intent_labels_map.items()}
+    label_to_pred_idx = {v: k for k, v in intent_labels_map.items()}
+    conversion_intent_map = {idx: int(label_to_pred_idx[label]) for idx, label in zh_intent_labels_map.items()}
     
-    label_to_pred_idx = {v: k for k, v in zh_slot_labels_map.items()}
-    conversion_slot_map = {idx: int(label_to_pred_idx[label]) for idx, label in slot_labels_map.items()}
-    
-     
-    converted_intent_preds = [torch.tensor(conversion_intent_map[str(p.item())]) for p in pred_intents]  # Use get to handle missing keys
-    converted_slot_preds = [torch.tensor([conversion_slot_map[str(s.item())] for s in slot_seq]) for slot_seq in pred_slots]
-    slot_tensor = torch.stack(converted_slot_preds) 
-    intent_tensor = torch.stack(converted_intent_preds)
-    return intent_tensor, slot_tensor
+    label_to_pred_idx = {v: k for k, v in slot_labels_map.items()}
+    conversion_slot_map = {idx: int(label_to_pred_idx[label]) for idx, label in zh_slot_labels_map.items()}
+
+    converted_intent_labels = [torch.tensor(conversion_intent_map.get(str(p.item()), -100)) for p in intent_labels]  
+    converted_slot_labels = [torch.tensor([conversion_slot_map.get(str(s.item()), -100) for s in slot_seq]) for slot_seq in slot_labels]
+    slot_tensor = torch.stack(converted_slot_labels) 
+    intent_tensor = torch.stack(converted_intent_labels)
+    return intent_tensor.to(device), slot_tensor.to(device)

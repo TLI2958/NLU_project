@@ -60,8 +60,6 @@ class MultiTaskICSL(nn.Module):
 
 
     def encode(self, inputs, attn_mask = None):
-        if attn_mask is not None:
-            attention_mask = attn_mask.to(dtype=torch.float32)
         # XLM-RoBERTa: 0 if masked, 1 not, according to 
         # https://huggingface.co/docs/transformers/en/model_doc/xlm-roberta#transformers.XLMRobertaModel.forward.attention_mask
         encoded = self.base_model(inputs, attention_mask = attn_mask)
@@ -112,14 +110,16 @@ class MultiTaskICSL(nn.Module):
         """
         src_encoded = self.encode(source, source_attn_mask)
         tgt_embed = self.base_model.embeddings(target)
-        attention_mask = source_attn_mask == 0
+        attention_mask = source_attn_mask.to(torch.float32)
+        attention_mask = (1 - attention_mask) * 1e-9
         # from https://pytorch.org/docs/stable/generated/torch.nn.MultiheadAttention.html
         # for key_padding_mask, just use boolean to indicate mask (True) or not (False)
         attn_output, _ = self.attention_layer(query = tgt_embed, key = src_encoded, value = src_encoded, 
                                              key_padding_mask = attention_mask.transpose(0,1))
+        
         # mxnet ref: https://nlp.gluon.ai/_modules/gluonnlp/model/attention_cell.html#AttentionCell
-        attn_output_ = self.dropout(attn_output)
-        attn_output_ = self.layerNorm(attn_output_)
+        # attn_output_ = self.dropout(attn_output)
+        attn_output_ = self.layerNorm(attn_output)
         decoded = self.ffn_layer(attn_output_)
         
         decoded = self.dropout(decoded)

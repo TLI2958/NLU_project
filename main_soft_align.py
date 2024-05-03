@@ -103,24 +103,24 @@ def train(model, optimizer, train_dataloader, para_dataloader):
             translation, intent_pred, slot_pred = model.translate_and_predict(source, 
                                                                               target, 
                                                                               source_attn_mask = source_attn_mask)
-            
-            intent_preds.append(intent_pred.to('cpu'))
-            slot_preds.append(slot_pred.to('cpu'))
-            intent_labels.append(intent_label.to('cpu'))
+ 
+            intent_preds.append(intent_pred.detach().to('cpu'))
+            slot_preds.append(slot_pred.detach().to('cpu'))
+            intent_labels.append(intent_label.detach().to('cpu'))
             slot_labels.append(slot_label.detach().to('cpu'))
 
             ic_loss = ic_loss_fn(intent_pred, intent_label)
-            # slot_loss = sl_loss_fn(slot_pred.view(-1, slot_pred.size(-1)), slot_label.view(-1))
+            # slot_loss = sl_loss_fn(slot_pred.view(-1, slot_pred.size(-1)), slot_label.view(-1)) 
             sl_loss = sl_loss_fn(slot_pred.transpose(1,2), slot_label[:, 1:])
             mce_loss = mt_loss_fn(translation.transpose(1,2), target[:, 1:])
             loss = ic_loss + sl_loss + mce_loss
-
+            icsl_loss += ic_loss.detach().to('cpu').item() + sl_loss.detach().to('cpu').item()
+            mt_loss += mce_loss.item()
+            
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
-            icsl_loss += ic_loss.item() + sl_loss.item()
-            mt_loss += mce_loss.item()
-        
+ 
 
         save_checkpoint(model, optimizer, epoch, args, loader_name = 'parallel')
         print('saved checkpoint...')
@@ -167,10 +167,12 @@ def train(model, optimizer, train_dataloader, para_dataloader):
             # slot_loss = sl_loss_fn(slot_pred.view(-1, slot_pred.size(-1)), slot_label.view(-1))
             sl_loss = sl_loss_fn(slot_pred.transpose(1,2), slot_label[:,1:])
             loss = ic_loss + sl_loss
+            step_loss += loss.item()
+            
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
-            step_loss += loss.item()
+
 
             intent_preds.append(intent_pred.detach().to('cpu'))
             slot_preds.append(slot_pred.detach().to('cpu'))
@@ -231,10 +233,10 @@ def evaluate(model, eval_dataloader):
         step_loss = 0
         for batch in tqdm(eval_dataloader, total=len(eval_dataloader)):
             inputs, slot_label, intent_label, attn_mask = map(lambda x: x.to(device), batch.values())
-            print(attn_mask.shape)
-            break
-            # TODO: label remap 
+            # note zh & en have different mapping!
             intent_pred, slot_pred = model(inputs, attn_mask)
+            intent_label, slot_label = convert_eval(intent_label, slot_label) 
+
             ic_loss = ic_loss_fn(intent_pred, intent_label)
             sl_loss = sl_loss_fn(slot_pred.transpose(1,2), slot_label[:,1:])
             loss = ic_loss + sl_loss
@@ -258,8 +260,8 @@ def evaluate(model, eval_dataloader):
             pickle.dump(eval_log, f)
             
         # eval on zh            
-        compute_metrics = create_compute_metrics(intent_labels = zh_intent_labels_map, 
-                                                 slot_labels = zh_slot_labels_map,
+        compute_metrics = create_compute_metrics(intent_labels = intent_labels_map, 
+                                                 slot_labels = slot_labels_map,
                                                  metrics ='all')
         res = compute_metrics(eval_data)
         average_loss = step_loss / eval_size
