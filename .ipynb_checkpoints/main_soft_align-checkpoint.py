@@ -43,9 +43,9 @@ def load_checkpoint(model, optimizer, args, loader_name = 'labeled'):
     if loader_name is None:
         checkpoint_path = f'{args.save_dir}/trained_{args.label}_{loader_name}_checkpoint.pth'
         if os.path.exists(checkpoint_path):
-            checkpoint = torch.load(checkpoint_path)
-            model.load_state_dict(checkpoint['model_state_dict'])
-            optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+            checkpoint = torch.load(checkpoint_path, map_location = torch.device(device))
+            model.load_state_dict(checkpoint['model_state_dict'], )
+            optimizer.load_state_dict(checkpoint['optimizer_state_dict'], )
             epoch = checkpoint['epoch']
             print(f"Checkpoint found. Resuming training from epoch {epoch}.")
             return model, optimizer, epoch
@@ -54,7 +54,7 @@ def load_checkpoint(model, optimizer, args, loader_name = 'labeled'):
     else:
         checkpoint_path = f'{args.save_dir}/trained_{args.label}_{loader_name}_checkpoint.pth'
         if os.path.exists(checkpoint_path):
-            checkpoint = torch.load(checkpoint_path)
+            checkpoint = torch.load(checkpoint_path, map_location = torch.device(device))
             model.load_state_dict(checkpoint['model_state_dict'])
             optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
             epoch = checkpoint['epoch']
@@ -69,7 +69,7 @@ def train(model, optimizer, train_dataloader, para_dataloader):
     # num_slot_labels & num_intents: according to https://arxiv.org/pdf/2204.08582
     # note 56 num_slot_labels! not 55!
     
-    model, optimizer, start_epoch = load_checkpoint(model, optimizer, args, loader_name = 'parallel')
+    model, optimizer, start_epoch = load_checkpoint(model, optimizer, args, loader_name = 'labeled')
 
     model.to(device)
     ic_loss_fn = nn.CrossEntropyLoss(reduction='mean')
@@ -196,8 +196,8 @@ def train(model, optimizer, train_dataloader, para_dataloader):
         # with torch.no_grad():
         #     # english only
         #     compute_metrics = create_compute_metrics(intent_labels = intent_labels_map, 
-        #                                          slot_labels= slot_labels_map, metrics = 'all',
-        #                                             para = False)
+        #                                          slot_labels= slot_labels_map, metrics = 'all',)
+                                                
         # res = compute_metrics(eval_data)
         # print('training on labeled data only...')
         pbar.set_postfix({'dataset': 'labeled',
@@ -207,7 +207,8 @@ def train(model, optimizer, train_dataloader, para_dataloader):
                           # 'ex_match_acc': res['ex_match_acc']})
         
         with open(os.path.join(args.save_dir, 'train.log.pkl'), 'a') as f:
-            f.write(f'epoch: {epoch}\ticsl_loss: {icsl_loss / paral_size}\tmt_loss: {mt_loss / paral_size}\tstep_loss: {step_loss / label_size}\n\nintent_acc: {res["intent_acc"]}\tslot_f1: {res["slot_micro_f1"]}\tex_match_acc: {res["ex_match_acc"]}\n')
+            f.write(f'\nepoch: {epoch}\tstep_loss: {step_loss / label_size}\t icls_loss: {icsl_loss / paral_size}\t mt_loss: {mt_loss / paral_size}\n')
+            # \n\nintent_acc: {res["intent_acc"]}\tslot_f1: {res["slot_micro_f1"]}\tex_match_acc: {res["ex_match_acc"]}\n')
 
 
 
@@ -235,7 +236,7 @@ def evaluate(model, eval_dataloader):
             inputs, slot_label, intent_label, attn_mask = map(lambda x: x.to(device), batch.values())
             # note zh & en have different mapping!
             intent_pred, slot_pred = model(inputs, attn_mask)
-            intent_label, slot_label = convert_eval(intent_label, slot_label) 
+            intent_label, slot_label = convert_eval(intent_label, slot_label, ) 
 
             ic_loss = ic_loss_fn(intent_pred, intent_label)
             sl_loss = sl_loss_fn(slot_pred.transpose(1,2), slot_label[:,1:])

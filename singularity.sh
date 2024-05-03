@@ -4,6 +4,7 @@
 SIF_IMAGE="$SCRATCH/my_env/cuda12.2.2-cudnn8.9.4-devel-ubuntu22.04.3.sif"
 OVERLAY="$SCRATCH/my_env/overlay-25GB-500K.ext3"
 
+
 # Construct the command to be executed inside the Singularity container
 INNER_COMMAND="source /ext3/env.sh && conda activate NLU_project && /bin/bash"
 

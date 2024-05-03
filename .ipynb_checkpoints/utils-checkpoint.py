@@ -257,8 +257,8 @@ class CollatorMASSIVEIntentClassSlotFill:
         return {k: torch.tensor(pad_tok_inputs[k], dtype=torch.int64) for k in order_of_key}
 
 # compute metrics
-def create_compute_metrics(intent_labels = None, slot_labels = None, ignore_labels=None,
-                           metrics='all', para = True):
+def create_compute_metrics(intent_labels = None, slot_labels = None, ignore_labels=None, 
+                           metrics='all', ):
     """
     Create a `compute_metrics` function for this task
 
@@ -289,7 +289,6 @@ def create_compute_metrics(intent_labels = None, slot_labels = None, ignore_labe
 
         intent_label_tuple = p.label_ids[0]
         slot_label_tuple = p.label_ids[1]
-
         intent_preds_am = [torch.argmax(x, axis = -1) for x in intent_preds]
         slot_preds_am = [torch.argmax(x, axis=-1) for x in slot_preds]
 
@@ -306,13 +305,12 @@ def create_compute_metrics(intent_labels = None, slot_labels = None, ignore_labe
                 labels_merge=labels_merge,
                 labels_ignore=ignore_num_lab,
                 pad='Other',
-                para = para
             )
     return compute_metrics
 
 # eval function: 
 def eval_preds(pred_intents=None, lab_intents=None, pred_slots=None, lab_slots=None,
-               eval_metrics='all', labels_ignore='Other', labels_merge=None, pad='Other', para = True):
+               eval_metrics='all', labels_ignore='Other', labels_merge=None, pad='Other',):
     """
     Function to evaluate the predictions from a model
 
@@ -342,9 +340,8 @@ def eval_preds(pred_intents=None, lab_intents=None, pred_slots=None, lab_slots=N
         assert len(pred_intents) == len(lab_intents),"pred_intents and lab_intents must be same len"
     if pred_slots is not None and lab_slots is not None:
         assert len(pred_slots) == len(lab_slots), "pred_slots and lab_slots must be same length"
-    # if para:
-    #     pred_intents, pred_slots = convert_para(pred_intents, pred_slots)
-        
+    
+    
     if ('intent_acc' in eval_metrics) or ('all' in eval_metrics):
         intent_acc = sklm.accuracy_score(lab_intents, pred_intents)
         results['intent_acc'] = intent_acc
@@ -355,26 +352,22 @@ def eval_preds(pred_intents=None, lab_intents=None, pred_slots=None, lab_slots=N
         bio_slot_labels, bio_slot_preds = [], []
         for lab, pred in zip(lab_slots, pred_slots):
             pred = list(pred)
-            print(pred)
             # Pad or truncate prediction as needed using `pad` arg
             if type(pred) == list:
                 pred = pred[:len(lab)] + [pad]*(len(lab) - len(pred))
 
             # Fix for Issue 21 -- subwords after the first one from a word should be ignored
             for i, x in enumerate(lab):
-                if x == -100:
-                    pred[i] = -100
-
+                if x.item() == -100:
+                    pred[i] = torch.tensor(-100)
             # convert to BIO
             bio_slot_labels.append(
                 convert_to_bio(lab, outside=labels_ignore, labels_merge=labels_merge)
             )
+            
             bio_slot_preds.append(
                 convert_to_bio(pred, outside=labels_ignore, labels_merge=labels_merge)
             )
-            print(bio_slot_labels, bio_slot_preds)
-            break
-        
         # with open('bio_slot_labels.pkl', 'wb') as f:
         #     pickle.dump(bio_slot_labels, f)
 
@@ -431,9 +424,8 @@ def convert_to_bio(seq_tags, outside='Other', labels_merge=None):
     :rtype: list
     """
 
-    seq_tags = [str(x) for x in seq_tags]
-
-    outside = [outside] if type(outside) != list else outside
+    seq_tags = [str(x.item()) for x in seq_tags]
+    outside = [outside] if isinstance(outside, str) else outside
     outside = [str(x) for x in outside]
 
     if labels_merge:
@@ -441,11 +433,11 @@ def convert_to_bio(seq_tags, outside='Other', labels_merge=None):
         labels_merge = [str(x) for x in labels_merge]
     else:
         labels_merge = []
-
+    
     bio_tagged = []
     prev_tag = None
     for tag in seq_tags:
-        if prev_tag == None and tag in labels_merge:
+        if prev_tag is None and tag in labels_merge:
             bio_tagged.append('O')
         elif tag in outside:
             bio_tagged.append('O')
@@ -462,7 +454,7 @@ def convert_to_bio(seq_tags, outside='Other', labels_merge=None):
     return bio_tagged
 
 
-def output_predictions(outputs, intent_labels, slot_labels, conf, tokenizer=None,
+def output_predictions(outputs, intent_labels, slot_labels, tokenizer=None,
                        combine_slots=True, remove_slots=None, add_pred_parse=True,
                        save_to_file=True):
     """
@@ -651,6 +643,7 @@ def convert_eval(intent_labels, slot_labels):
 
     converted_intent_labels = [torch.tensor(conversion_intent_map.get(str(p.item()), -100)) for p in intent_labels]  
     converted_slot_labels = [torch.tensor([conversion_slot_map.get(str(s.item()), -100) for s in slot_seq]) for slot_seq in slot_labels]
+        
     slot_tensor = torch.stack(converted_slot_labels) 
     intent_tensor = torch.stack(converted_intent_labels)
     return intent_tensor.to(device), slot_tensor.to(device)
