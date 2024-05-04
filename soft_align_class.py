@@ -1,4 +1,4 @@
-# modified from soft-align implementation in multiatis: 
+# largely modified from soft-align implementation in multiatis: 
 # https://github.com/amazon-science/multiatis/blob/main/code/scripts/bert_soft_align.py
 # implementation of soft-align in paper: https://arxiv.org/pdf/2004.14353
 # original code is in mxnet, this is a port to pytorch + transformers
@@ -111,9 +111,8 @@ class MultiTaskICSL(nn.Module):
         src_encoded = self.encode(source, source_attn_mask)
         tgt_embed = self.base_model.embeddings(target)
         attention_mask = source_attn_mask.to(torch.float32)
-        attention_mask = (1 - attention_mask) * 1e-9
+        attention_mask = (1 - attention_mask) * (-1e-9)
         # from https://pytorch.org/docs/stable/generated/torch.nn.MultiheadAttention.html
-        # for key_padding_mask, just use boolean to indicate mask (True) or not (False)
         attn_output, _ = self.attention_layer(query = tgt_embed, key = src_encoded, value = src_encoded, 
                                              key_padding_mask = attention_mask.transpose(0,1))
         

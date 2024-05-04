@@ -102,7 +102,7 @@ def train(model, optimizer, train_dataloader, para_dataloader):
             translation, intent_pred, slot_pred = model.translate_and_predict(source, 
                                                                               target, 
                                                                               source_attn_mask = source_attn_mask)
- 
+
             intent_preds.append(intent_pred.detach().to('cpu'))
             slot_preds.append(slot_pred.detach().to('cpu'))
             intent_labels.append(intent_label.detach().to('cpu'))
