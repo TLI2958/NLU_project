@@ -60,7 +60,7 @@ torch.seed()
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # note: we are using the dataset: 
-# https://huggingface.co/datasets/AmazonScience/massive
+# https://github.com/alexa/massive?tab=readme-ov-file
 
 # collator function for MASSIVE intent classification and slot filling
 # modified for para_dataloaderclass CollatorMASSIVEIntentClassSlotFill_para:
@@ -168,7 +168,7 @@ class CollatorMASSIVEIntentClassSlotFill_para:
 
         # Convert to PyTorch tensors
         return {k: torch.tensor(pad_tok_inputs[k], dtype=torch.int64) for k in order_of_key}
-
+        
 class CollatorMASSIVEIntentClassSlotFill:
     """
     Data collator for the MASSIVE intent classification and slot tasks
@@ -368,6 +368,7 @@ def eval_preds(pred_intents=None, lab_intents=None, pred_slots=None, lab_slots=N
             bio_slot_preds.append(
                 convert_to_bio(pred, outside=labels_ignore, labels_merge=labels_merge)
             )
+
         # with open('bio_slot_labels.pkl', 'wb') as f:
         #     pickle.dump(bio_slot_labels, f)
 
@@ -647,3 +648,21 @@ def convert_eval(intent_labels, slot_labels):
     slot_tensor = torch.stack(converted_slot_labels) 
     intent_tensor = torch.stack(converted_intent_labels)
     return intent_tensor.to(device), slot_tensor.to(device)
+
+def convert_train(example):
+    with open(os.getcwd() + '/data_en/en.intents', 'r', encoding = 'UTF-8') as file:
+        intent_labels_map = json.load(file)
+    
+    with open(os.getcwd() + '/data_en/en.slots', 'r', encoding = 'UTF-8') as file:
+        slot_labels_map = json.load(file)
+    
+        
+    label_to_pred_intent_idx = {v: k for k, v in intent_labels_map.items()}
+    
+    label_to_pred_slot_idx = {v: k for k, v in slot_labels_map.items()}
+    
+    converted_intent_labels = [int(label_to_pred_intent_idx.get(p, -100)) for p in example['target_intents']]  
+    converted_slot_labels = [[int(label_to_pred_slot_idx.get(s, -100)) for s in slot_seq] for slot_seq in example['target_slots']]
+    example['target_intents'], example['target_slots'] = converted_intent_labels, converted_slot_labels
+    return example
+       

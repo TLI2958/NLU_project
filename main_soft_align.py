@@ -85,7 +85,6 @@ def train(model, optimizer, train_dataloader, para_dataloader):
     for epoch in pbar:
         mt_loss, icsl_loss, step_loss = 0, 0, 0
         
-        # prepare for eval
         intent_preds = []
         slot_preds = []
         intent_labels = []
@@ -134,11 +133,9 @@ def train(model, optimizer, train_dataloader, para_dataloader):
         with open(os.path.join(os.getcwd(), 'para.pkl'), 'wb') as f:
             pickle.dump(eval_, f)
             
-        # eval on zh
-        # compute_metrics = create_compute_metrics(intent_labels = zh_intent_labels_map, 
-        #                                          slot_labels= zh_slot_labels_map, metrics = 'all')
-        # with torch.no_grad():
-        #     res = compute_metrics(eval_data)
+        # eval on zh every 3 epochs
+        if not epoch%3:
+            evaluate(model, eval_dataloader = train_eval_dataloader, train_eval= True)
         # print('training on parallel data...')
         pbar.set_postfix({'dataset': 'parallel',
                         'train_loss': (icsl_loss + mt_loss) / paral_size , 
@@ -212,7 +209,7 @@ def train(model, optimizer, train_dataloader, para_dataloader):
 
 
 
-def evaluate(model, eval_dataloader):
+def evaluate(model, eval_dataloader, train_eval = False):
     """Evaluate the model on validation dataset.
         
     Should be held-out Chinese utterances
@@ -257,7 +254,7 @@ def evaluate(model, eval_dataloader):
         eval_log = {'predictions': (torch.cat(intent_preds), torch.cat(slot_preds)),
                      'label_ids': (torch.cat(intent_labels), torch.cat(slot_labels))}
 
-        with open(os.path.join(os.getcwd(), 'eval.pkl'), 'wb') as f:
+        with open(os.path.join(os.getcwd(), f'eval_{train_eval}.pkl'), 'wb') as f:
             pickle.dump(eval_log, f)
             
         # eval on zh            
@@ -278,7 +275,7 @@ def evaluate(model, eval_dataloader):
                     f"exact match accuracy: {res['ex_match_acc']:.2f}\n")
         
     
-        with open(args.save_dir + 'eval.log.pkl', 'a') as f:
+        with open(args.save_dir + f'eval_{train_eval}.log.pkl', 'a') as f:
             f.write(log_message)
 
 
@@ -313,6 +310,9 @@ if __name__ == "__main__":
     zh_val = Dataset.from_file(os.getcwd() + '/data_zh/zh.dev/data-00000-of-00001.arrow')
     para_dataset = deepcopy(en_train)
     para_dataset = para_dataset.add_column("target_utt", zh_train['utt'])
+    para_dataset = para_dataset.add_column("target_slots", zh_train['slots_str'])
+    para_dataset = para_dataset.add_column("target_intents", zh_train['intent_str'])
+    para_dataset = para_dataset.map(lambda x: convert_train(x), batched=True)    
 
     para_dataloader = DataLoader(para_dataset, batch_size=args.batch_size, shuffle=True, 
                                 collate_fn=CollatorMASSIVEIntentClassSlotFill_para(tokenizer=tokenizer, max_length=512))
@@ -320,9 +320,12 @@ if __name__ == "__main__":
                                 collate_fn=CollatorMASSIVEIntentClassSlotFill(tokenizer=tokenizer, max_length=512))
     eval_dataloader = DataLoader(zh_val, batch_size=args.batch_size, shuffle=True,
                                     collate_fn=CollatorMASSIVEIntentClassSlotFill(tokenizer=tokenizer, max_length=512))
+    train_eval_dataloader = DataLoader(zh_train, batch_size=args.batch_size, shuffle=True,
+                                    collate_fn=CollatorMASSIVEIntentClassSlotFill(tokenizer=tokenizer, max_length=512))
     vocab = tokenizer.get_vocab()
     vocab_size = len(vocab)
-    # load mappings: should be using en mapping since order matters
+
+     # load mappings: should be using en mapping since order matters
     with open(os.getcwd() + '/data_en/en.intents', 'r', encoding = 'UTF-8') as file:
         intent_labels_map = json.load(file)
     
@@ -334,7 +337,6 @@ if __name__ == "__main__":
     
     with open(os.getcwd() + '/data_zh/zh.slots', 'r', encoding = 'UTF-8') as file:
         zh_slot_labels_map =json.load(file)
-
         
     if args.train:
         # num_slot_labels & num_intents: according to https://arxiv.org/pdf/2204.08582
