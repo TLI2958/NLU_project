@@ -134,7 +134,7 @@ def train(model, optimizer, train_dataloader, para_dataloader):
             pickle.dump(eval_, f)
             
         # eval on zh every 3 epochs
-        if not epoch%3:
+        if epoch%3 == 0:
             evaluate(model, eval_dataloader = train_eval_dataloader, train_eval= True)
         # print('training on parallel data...')
         pbar.set_postfix({'dataset': 'parallel',
@@ -198,7 +198,7 @@ def train(model, optimizer, train_dataloader, para_dataloader):
         # res = compute_metrics(eval_data)
         # print('training on labeled data only...')
         pbar.set_postfix({'dataset': 'labeled',
-                          'train_loss': loss.item() / (label_size),})
+                          'train_loss': step_loss / (label_size),})
                           # 'intent_acc': res['intent_acc'],
                           # 'slot_f1': res['slot_micro_f1'],
                           # 'ex_match_acc': res['ex_match_acc']})
@@ -291,6 +291,7 @@ if __name__ == "__main__":
     parser.add_argument("--label", type=str, default="ICSL")
     parser.add_argument("--num_epochs", type=int, default=1)
     parser.add_argument("--batch_size", type=int, default=8)
+    parser.add_argument("--debug", action="store_true", help="train a model on the small training data to debug")
 
     args = parser.parse_args()
     random_seed = 1012
@@ -350,7 +351,20 @@ if __name__ == "__main__":
         model = model.to(device)
         optimizer = Adam(model.parameters(), lr= args.lr)
         model, optimizer, start_epoch = load_checkpoint(model, optimizer, args, loader_name='labeled')
-        evaluate(model, eval_dataloader)
-    
+        evaluate(model, eval_dataloader, )
+    if args.debug:
+        model = MultiTaskICSL(base_model, vocab_size, num_slot_labels=56, num_intents=60)
+        model = model.to(device)
+        optimizer = Adam(model.parameters(), lr = args.lr)
+        
+        small_para_dataset = para_dataset.shuffle(seed=random_seed).select(range(200))
+        small_train_dataset = en_train.shuffle(seed=random_seed).select(range(200))
+        small_para_dataloader = DataLoader(small_para_dataset, batch_size=args.batch_size, shuffle=True, 
+                                collate_fn=CollatorMASSIVEIntentClassSlotFill_para(tokenizer=tokenizer, max_length=512))
+        small_train_dataloader = DataLoader(small_train_dataset, batch_size=args.batch_size, shuffle=True, 
+                                collate_fn=CollatorMASSIVEIntentClassSlotFill(tokenizer=tokenizer, max_length=512))
+        
+        train(model, optimizer, small_train_dataloader, small_para_dataloader)
+        
     
 

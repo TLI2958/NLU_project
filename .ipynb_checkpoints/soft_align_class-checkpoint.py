@@ -111,7 +111,7 @@ class MultiTaskICSL(nn.Module):
         src_encoded = self.encode(source, source_attn_mask)
         tgt_embed = self.base_model.embeddings(target)
         attention_mask = source_attn_mask.to(torch.float32)
-        attention_mask = (1 - attention_mask) * (-1e-9)
+        attention_mask = (1 - attention_mask) * (-1e9)
         # from https://pytorch.org/docs/stable/generated/torch.nn.MultiheadAttention.html
         attn_output, _ = self.attention_layer(query = tgt_embed, key = src_encoded, value = src_encoded, 
                                              key_padding_mask = attention_mask.transpose(0,1))
