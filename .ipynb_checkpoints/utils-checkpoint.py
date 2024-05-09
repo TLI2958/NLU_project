@@ -42,6 +42,7 @@ import numpy as np
 import sklearn.metrics as sklm
 from seqeval.metrics import f1_score
 import pickle 
+import sys
 
 from math import sqrt
 import warnings
@@ -454,10 +455,10 @@ def convert_to_bio(seq_tags, outside='Other', labels_merge=None):
 
     return bio_tagged
 
-
+# TODO: convert to text
 def output_predictions(outputs, intent_labels, slot_labels, tokenizer=None,
                        combine_slots=True, remove_slots=None, add_pred_parse=True,
-                       save_to_file=True):
+                       save_to_file=True, file_dir = None):
     """
     :param outputs: The outputs from the model
     :type outputs: named_tuple
@@ -481,18 +482,10 @@ def output_predictions(outputs, intent_labels, slot_labels, tokenizer=None,
 
     remove_slots = ['Other'] if not remove_slots else remove_slots
 
-    pred_file = conf.get('train_val.predictions_file')
-
-    if pred_file and (conf.get('train_val.trainer_args.locale_eval_strategy') != 'all only'):
-        raise NotImplementedError("You must use 'all only' as the locale_eval_strategy if you"
-                                  " specify a predictions file")
+    with open(file_dir + '.pkl') as f:
+        outputs = pickle.load(f)
 
     final_outputs = []
-
-    # if there is a space within sequence of subwords that should be joined back together,
-    # it's probably because the tokenizer converted a Zero Width Space to a normal space.
-    # Make this False to not replace the space with a ZWSP when re-joining subwords
-    replace_zwsp = conf.get('test.replace_inner_space_zwsp', default=True)
 
     # Create strings of the slot predictions
     intent_preds, slot_preds = outputs.predictions[0], outputs.predictions[1]
@@ -596,44 +589,17 @@ def output_predictions(outputs, intent_labels, slot_labels, tokenizer=None,
     return final_outputs
 
 
-# def convert_para(pred_intents, pred_slots):
-#     with open(os.getcwd() + '/data_en/en.intents', 'r', encoding = 'UTF-8') as file:
-#         intent_labels_map = json.load(file)
-    
-#     with open(os.getcwd() + '/data_en/en.slots', 'r', encoding = 'UTF-8') as file:
-#         slot_labels_map = json.load(file)
-    
-#     with open(os.getcwd() + '/data_zh/zh.intents', 'r', encoding = 'UTF-8') as file:
-#         zh_intent_labels_map = json.load(file)
-    
-#     with open(os.getcwd() + '/data_zh/zh.slots', 'r', encoding = 'UTF-8') as file:
-#         zh_slot_labels_map =json.load(file)
-    
-#     label_to_pred_idx = {v: k for k, v in zh_intent_labels_map.items()}
-#     conversion_intent_map = {idx: int(label_to_pred_idx[label]) for idx, label in intent_labels_map.items()}
-    
-#     label_to_pred_idx = {v: k for k, v in zh_slot_labels_map.items()}
-#     conversion_slot_map = {idx: int(label_to_pred_idx[label]) for idx, label in slot_labels_map.items()}
-    
-     
-#     converted_intent_preds = [torch.tensor(conversion_intent_map.get(str(p.item()),-100)) for p in pred_intents]  # Use get to handle missing keys
-#     converted_slot_preds = [torch.tensor([conversion_slot_map.get(str(s.item()), -100) for s in slot_seq]) for slot_seq in pred_slots]
-#     slot_tensor = torch.stack(converted_slot_preds) 
-#     intent_tensor = torch.stack(converted_intent_preds)
-#     return intent_tensor, slot_tensor
-
-
-def convert_eval(intent_labels, slot_labels):
+def convert_eval(intent_labels, slot_labels, lang = 'zh'):
     with open(os.getcwd() + '/data_en/en.intents', 'r', encoding = 'UTF-8') as file:
         intent_labels_map = json.load(file)
     
     with open(os.getcwd() + '/data_en/en.slots', 'r', encoding = 'UTF-8') as file:
         slot_labels_map = json.load(file)
     
-    with open(os.getcwd() + '/data_zh/zh.intents', 'r', encoding = 'UTF-8') as file:
+    with open(os.getcwd() + f'/data_{lang}/{lang}.intents', 'r', encoding = 'UTF-8') as file:
         zh_intent_labels_map = json.load(file)
     
-    with open(os.getcwd() + '/data_zh/zh.slots', 'r', encoding = 'UTF-8') as file:
+    with open(os.getcwd() + f'/data_{lang}/{lang}.slots', 'r', encoding = 'UTF-8') as file:
         zh_slot_labels_map =json.load(file)
     
     label_to_pred_idx = {v: k for k, v in intent_labels_map.items()}
@@ -648,6 +614,7 @@ def convert_eval(intent_labels, slot_labels):
     slot_tensor = torch.stack(converted_slot_labels) 
     intent_tensor = torch.stack(converted_intent_labels)
     return intent_tensor.to(device), slot_tensor.to(device)
+    
 
 def convert_train(example):
     with open(os.getcwd() + '/data_en/en.intents', 'r', encoding = 'UTF-8') as file:
