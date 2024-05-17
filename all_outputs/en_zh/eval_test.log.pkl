@@ -1,0 +1,5 @@
+eval loss: 1.4171, intent accuracy: 0.85, slot f1: 0.42, exact match accuracy: 0.31 (epoch 6)
+eval loss: 1.4807, intent accuracy: 0.84, slot f1: 0.41, exact match accuracy: 0.32 (epoch 8)
+eval loss: 1.5007, intent accuracy: 0.84, slot f1: 0.40, exact match accuracy: 0.31 (epoch 6, bs 8)
+eval loss: 1.4716, intent accuracy: 0.84, slot f1: 0.42, exact match accuracy: 0.32 (epoch 4, bs 8)
+eval loss: 1.4396, intent accuracy: 0.85, slot f1: 0.43, exact match accuracy: 0.32 (epoch 5, bs 8)

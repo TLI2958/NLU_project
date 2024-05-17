@@ -1,0 +1,25 @@
+eval loss: 2.6210, intent accuracy: 0.60, slot f1: 0.26, exact match accuracy: 0.16
+eval loss: 1.5113, intent accuracy: 0.84, slot f1: 0.38, exact match accuracy: 0.28
+eval loss: 1.3038, intent accuracy: 0.88, slot f1: 0.40, exact match accuracy: 0.33
+eval loss: 1.1487, intent accuracy: 0.91, slot f1: 0.43, exact match accuracy: 0.34
+eval loss: 1.0881, intent accuracy: 0.93, slot f1: 0.41, exact match accuracy: 0.35
+eval loss: 0.8952, intent accuracy: 0.95, slot f1: 0.44, exact match accuracy: 0.38
+eval loss: 0.8760, intent accuracy: 0.96, slot f1: 0.42, exact match accuracy: 0.37
+eval loss: 0.8436, intent accuracy: 0.97, slot f1: 0.42, exact match accuracy: 0.38
+eval loss: 0.9153, intent accuracy: 0.98, slot f1: 0.41, exact match accuracy: 0.38
+eval loss: 0.9315, intent accuracy: 0.98, slot f1: 0.39, exact match accuracy: 0.36
+eval loss: 0.9234, intent accuracy: 0.98, slot f1: 0.38, exact match accuracy: 0.36
+eval loss: 0.9976, intent accuracy: 0.99, slot f1: 0.35, exact match accuracy: 0.34
+eval loss: 1.0278, intent accuracy: 0.99, slot f1: 0.34, exact match accuracy: 0.35
+eval loss: 0.9765, intent accuracy: 0.99, slot f1: 0.36, exact match accuracy: 0.37
+eval loss: 0.9354, intent accuracy: 0.99, slot f1: 0.37, exact match accuracy: 0.37
+
+eval loss: 2.7906, intent accuracy: 0.61, slot f1: 0.28, exact match accuracy: 0.16
+eval loss: 1.4622, intent accuracy: 0.84, slot f1: 0.39, exact match accuracy: 0.30
+eval loss: 1.1892, intent accuracy: 0.89, slot f1: 0.43, exact match accuracy: 0.35
+eval loss: 1.0596, intent accuracy: 0.92, slot f1: 0.43, exact match accuracy: 0.36
+eval loss: 0.9468, intent accuracy: 0.94, slot f1: 0.44, exact match accuracy: 0.37
+eval loss: 0.8712, intent accuracy: 0.95, slot f1: 0.42, exact match accuracy: 0.38
+eval loss: 0.8093, intent accuracy: 0.96, slot f1: 0.44, exact match accuracy: 0.39
+eval loss: 0.8370, intent accuracy: 0.98, slot f1: 0.40, exact match accuracy: 0.37
+eval loss: 0.8530, intent accuracy: 0.98, slot f1: 0.40, exact match accuracy: 0.39
