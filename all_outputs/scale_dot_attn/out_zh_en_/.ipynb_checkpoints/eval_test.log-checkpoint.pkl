@@ -1,0 +1,1 @@
+eval loss: 1.3774, intent accuracy: 0.85, slot f1: 0.48, exact match accuracy: 0.35 (epoch 5)

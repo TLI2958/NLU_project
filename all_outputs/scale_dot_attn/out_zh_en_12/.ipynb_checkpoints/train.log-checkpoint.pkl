@@ -1,0 +1,2 @@
+
+epoch: 1	step_loss: 3.575064836939176	 icls_loss: 0.0	 mt_loss: 0.0

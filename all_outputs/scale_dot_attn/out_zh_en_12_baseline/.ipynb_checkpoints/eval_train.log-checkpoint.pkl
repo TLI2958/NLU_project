@@ -1,0 +1,3 @@
+eval loss: 3.0590, intent accuracy: 0.46, slot f1: 0.35, exact match accuracy: 0.12
+eval loss: 2.6508, intent accuracy: 0.54, slot f1: 0.40, exact match accuracy: 0.18
+eval loss: 2.6512, intent accuracy: 0.55, slot f1: 0.40, exact match accuracy: 0.19

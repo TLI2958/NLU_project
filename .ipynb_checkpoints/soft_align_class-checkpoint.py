@@ -52,6 +52,7 @@ class MultiTaskICSL(nn.Module):
 
         self.attention_layer = nn.MultiheadAttention(embed_dim=hidden_size, num_heads=1,
                                                                        dropout = 0.02)
+        
         self.layerNorm = nn.LayerNorm(hidden_size, eps=1e-6)
         # after dropout & layer norm
         self.ffn_layer = nn.Sequential(
@@ -114,8 +115,15 @@ class MultiTaskICSL(nn.Module):
         attention_mask = source_attn_mask.to(torch.float32)
         attention_mask = (1 - attention_mask) * (-1e9)
         # from https://pytorch.org/docs/stable/generated/torch.nn.MultiheadAttention.html
-        attn_output, _ = self.attention_layer(query = tgt_embed, key = src_encoded, value = src_encoded, 
-                                             key_padding_mask = attention_mask.transpose(0,1))
+        # attn_output, _ = self.attention_layer(query = tgt_embed, key = src_encoded, value = src_encoded, 
+        #                                      key_padding_mask = attention_mask.transpose(0,1))
+        
+        # https://huggingface.co/docs/diffusers/en/optimization/torch2.0#scaled-dot-product-attention
+        attn_mask = attention_mask.unsqueeze(2).expand(-1,-1, attention_mask.shape[-1]).transpose(-2,-1)
+        attn_output = F.scaled_dot_product_attention(query = tgt_embed, key = src_encoded, 
+                                                     value =src_encoded, 
+                                                     attn_mask = attention_mask,
+                                                     dropout_p=0.02)
         
         # mxnet ref: https://nlp.gluon.ai/_modules/gluonnlp/model/attention_cell.html#AttentionCell
         # attn_output_ = self.dropout(attn_output)

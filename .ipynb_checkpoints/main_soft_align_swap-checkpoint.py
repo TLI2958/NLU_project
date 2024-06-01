@@ -70,8 +70,7 @@ def load_checkpoint(model, optimizer, args, loader_name = 'labeled'):
             return model, optimizer, epoch
         else:
             return model, optimizer, 0
-
-
+            
 
 def train(model, optimizer, lr_scheduler, train_dataloader, para_dataloader):
     # num_slot_labels & num_intents: according to https://arxiv.org/pdf/2204.08582
@@ -120,7 +119,7 @@ def train(model, optimizer, lr_scheduler, train_dataloader, para_dataloader):
             ic_loss = ic_loss_fn(intent_pred, intent_label)
             # slot_loss = sl_loss_fn(slot_pred.view(-1, slot_pred.size(-1)), slot_label.view(-1)) 
             sl_loss = sl_loss_fn(slot_pred.transpose(1,2), slot_label[:, 1:])
-            mce_loss = mt_loss_fn(translation.transpose(1,2), target[:, 1:]) # since zh-en
+            mce_loss = mt_loss_fn(translation.transpose(1,2), source[:, 1:]) # since zh-en
             loss = ic_loss + sl_loss + mce_loss
             icsl_loss += ic_loss.detach().to('cpu').item() + sl_loss.detach().to('cpu').item()
             mt_loss += mce_loss.item()

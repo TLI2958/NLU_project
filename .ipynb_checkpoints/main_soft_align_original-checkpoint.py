@@ -6,7 +6,7 @@
 # also from MASSIVE utils:
 # https://github.com/alexa/massive/blob/main/src/massive/utils/
 
-from utils_swap import *
+from utils import *
 from soft_align_class import *
 from torch.cuda.amp import autocast, GradScaler
 
@@ -103,11 +103,10 @@ def train(model, optimizer, lr_scheduler, train_dataloader, para_dataloader):
         #                                                                  target.to(device), slot_label.to(device), 
         #                                                                  intent_label.to(device), 
         #                                                                  source_attn_mask.to(device))
-            
         #     translation, intent_pred, slot_pred = model.translate_and_predict(source, 
         #                                                                       target, 
         #                                                                       source_attn_mask = source_attn_mask)
-
+            
         #     intent_preds.append(intent_pred.detach().to('cpu'))
         #     slot_preds.append(slot_pred.detach().to('cpu'))
         #     intent_labels.append(intent_label.detach().to('cpu'))
@@ -130,30 +129,22 @@ def train(model, optimizer, lr_scheduler, train_dataloader, para_dataloader):
         # print('saved checkpoint...')
         # predictions = (torch.cat(intent_preds), torch.cat(slot_preds))
         # label_ids = (torch.cat(intent_labels), torch.cat(slot_labels))
-        # eval_data = Eval(predictions=predictions, label_ids=label_ids)
 
         # eval_ = {'predictions': (torch.cat(intent_preds), torch.cat(slot_preds)),
         #              'label_ids': (torch.cat(intent_labels), torch.cat(slot_labels))}
-        
-        ## with open(os.path.join(os.getcwd(), 'para.pkl'), 'wb') as f:
-        ##     pickle.dump(eval_, f)
             
         # pbar.set_postfix({'dataset': 'parallel',
         #         'train_loss': (icsl_loss + mt_loss) / paral_size , 
         #           'icsl_loss': icsl_loss / paral_size,
         #           'mt_loss': mt_loss / paral_size,})
-                  # 'intent_acc': res['intent_acc'],
-                  # 'slot_f1': res['slot_micro_f1'],
-                  # 'ex_match_acc': res['ex_match_acc']})
         
         # eval on zh every 3 epochs
         # if epoch%3 == 0:
         # res = evaluate(model, eval_dataloader = train_eval_dataloader, train_eval= True)
         
         # sys.stdout.flush()
-        # train on labeled data
- # train on labeled data
         
+        # train on labeled data
         for batch in tqdm(train_dataloader, 
                              total=len(train_dataloader)):
             inputs, slot_label, intent_label, attn_mask = batch.values()
@@ -195,7 +186,6 @@ def train(model, optimizer, lr_scheduler, train_dataloader, para_dataloader):
         # if epoch%3 == 0:
         evaluate(model, eval_dataloader = train_eval_dataloader, train_eval= True)
         # lr_scheduler.step()
-
 
 def evaluate(model, eval_dataloader, train_eval = False):
     """Evaluate the model on validation dataset.
@@ -389,5 +379,7 @@ if __name__ == "__main__":
         small_eval_dataloader = DataLoader(small_eval_dataset, batch_size=args.batch_size, shuffle=True, 
                                 collate_fn=CollatorMASSIVEIntentClassSlotFill(tokenizer=tokenizer, max_length=512))
         evaluate(model, small_eval_dataloader, )
+
+
 
 

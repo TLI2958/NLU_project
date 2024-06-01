@@ -202,7 +202,7 @@ class CollatorMASSIVEIntentClassSlotFill:
             truncation=True,
             is_split_into_words=True
         )
-
+        
         # Align the labels with the tokenized utterance
         # adapted from here: https://huggingface.co/docs/transformers/custom_datasets#tok_ner
         for i, entry in enumerate(batch):
@@ -259,7 +259,7 @@ class CollatorMASSIVEIntentClassSlotFill:
 
 # compute metrics
 def create_compute_metrics(intent_labels = None, slot_labels = None, ignore_labels=None, 
-                           metrics='all', ):
+                           metrics='all', average = 'micro'):
     """
     Create a `compute_metrics` function for this task
 
@@ -292,8 +292,7 @@ def create_compute_metrics(intent_labels = None, slot_labels = None, ignore_labe
         slot_label_tuple = p.label_ids[1]
         intent_preds_am = [torch.argmax(x, axis = -1) for x in intent_preds]
         slot_preds_am = [torch.argmax(x, axis=-1) for x in slot_preds]
-
-
+        attn_masks = p.attn_masks
         # merge -100, which we used for the subsequent subwords in a full word after tokenizing
         labels_merge = [-100]
 
@@ -306,12 +305,15 @@ def create_compute_metrics(intent_labels = None, slot_labels = None, ignore_labe
                 labels_merge=labels_merge,
                 labels_ignore=ignore_num_lab,
                 pad='Other',
+                attn_masks = attn_masks,
+                average = average,
             )
     return compute_metrics
 
 # eval function: 
 def eval_preds(pred_intents=None, lab_intents=None, pred_slots=None, lab_slots=None,
-               eval_metrics='all', labels_ignore='Other', labels_merge=None, pad='Other',):
+               eval_metrics='all', labels_ignore='Other', labels_merge=None, pad='Other', 
+              attn_masks = None, average = 'micro'):
     """
     Function to evaluate the predictions from a model
 
@@ -351,25 +353,29 @@ def eval_preds(pred_intents=None, lab_intents=None, pred_slots=None, lab_slots=N
 
     if lab_slots is not None and pred_slots is not None:
         bio_slot_labels, bio_slot_preds = [], []
-        for lab, pred in zip(lab_slots, pred_slots):
+        # j = 0
+        for lab, pred, attn in zip(lab_slots, pred_slots, attn_masks):
             pred = list(pred)
+            attn = list(attn)
             # Pad or truncate prediction as needed using `pad` arg
             if type(pred) == list:
                 pred = pred[:len(lab)] + [pad]*(len(lab) - len(pred))
-
             # Fix for Issue 21 -- subwords after the first one from a word should be ignored
             for i, x in enumerate(lab):
                 if x.item() == -100:
                     pred[i] = torch.tensor(-100)
+
             # convert to BIO
             bio_slot_labels.append(
-                convert_to_bio(lab, outside=labels_ignore, labels_merge=labels_merge)
+                convert_to_bio(lab, outside=labels_ignore, labels_merge=labels_merge, attn_mask = attn)
             )
-            
+            # print('bio_lab:', bio_slot_labels[j][:10])
             bio_slot_preds.append(
-                convert_to_bio(pred, outside=labels_ignore, labels_merge=labels_merge)
+                convert_to_bio(pred, outside=labels_ignore, labels_merge=labels_merge, attn_mask = attn)
             )
-
+            # print('bio_preds:', bio_slot_preds[j][:10])
+            # j += 1
+        # raise ValueError()
         # with open('bio_slot_labels.pkl', 'wb') as f:
         #     pickle.dump(bio_slot_labels, f)
 
@@ -381,7 +387,7 @@ def eval_preds(pred_intents=None, lab_intents=None, pred_slots=None, lab_slots=N
     if ('slot_micro_f1' in eval_metrics) or ('all' in eval_metrics):
 
         # from seqeval
-        smf1 = f1_score(bio_slot_labels, bio_slot_preds)
+        smf1 = f1_score(bio_slot_labels, bio_slot_preds, average = average)
         results['slot_micro_f1'] = smf1
         # Assuming normal distribution. Multiply by z (from "z table") to get confidence int
         total_slots = sum([len(x) for x in bio_slot_preds])
@@ -407,7 +413,7 @@ def eval_preds(pred_intents=None, lab_intents=None, pred_slots=None, lab_slots=N
 
     return results
 
-def convert_to_bio(seq_tags, outside='Other', labels_merge=None):
+def convert_to_bio(seq_tags, outside='Other', labels_merge=None, attn_mask = None):
     """
     Converts a sequence of tags into BIO format. EX:
 
@@ -425,10 +431,11 @@ def convert_to_bio(seq_tags, outside='Other', labels_merge=None):
     :return: a BIO-tagged sequence
     :rtype: list
     """
-
+    if attn_mask is None:
+        raise ValueError("Attention mask cannot be None!")
     seq_tags = [str(x.item()) for x in seq_tags]
     outside = [outside] if isinstance(outside, str) else outside
-    outside = [str(x) for x in outside]
+    outside = [str(x.item()) for x in outside]
 
     if labels_merge:
         labels_merge = [labels_merge] if type(labels_merge) != list else labels_merge
@@ -438,20 +445,21 @@ def convert_to_bio(seq_tags, outside='Other', labels_merge=None):
     
     bio_tagged = []
     prev_tag = None
-    for tag in seq_tags:
-        if prev_tag is None and tag in labels_merge:
-            bio_tagged.append('O')
-        elif tag in outside:
-            bio_tagged.append('O')
-            prev_tag = tag
-        elif tag != prev_tag and tag not in labels_merge:
-            bio_tagged.append('B-' + tag)
-            prev_tag = tag
-        elif tag == prev_tag or tag in labels_merge:
-            if prev_tag in outside:
+    for i, tag in enumerate(seq_tags):
+        if attn_mask[i] == 1:
+            if tag in outside:
                 bio_tagged.append('O')
-            else:
-                bio_tagged.append('I-' + prev_tag)
+                prev_tag = None
+            elif tag != prev_tag and tag not in labels_merge:
+                bio_tagged.append('B-' + tag)
+                prev_tag = tag
+            elif tag == prev_tag or tag in labels_merge:
+                if prev_tag in outside or prev_tag is None:
+                    bio_tagged.append('O')
+                else:
+                    bio_tagged.append('I-' + prev_tag)
+        else:
+            bio_tagged.append('O')
 
     return bio_tagged
 
@@ -589,11 +597,11 @@ def output_predictions(outputs, intent_labels, slot_labels, tokenizer=None,
     return final_outputs
 
 
-def convert_eval(intent_labels, slot_labels, lang = 'zh'):
-    with open(os.getcwd() + '/data_en/en.intents', 'r', encoding = 'UTF-8') as file:
+def convert_eval(intent_labels, slot_labels, lang = 'zh', src = 'en'):
+    with open(os.getcwd() + f'/data_{src}/{src}.intents', 'r', encoding = 'UTF-8') as file:
         intent_labels_map = json.load(file)
     
-    with open(os.getcwd() + '/data_en/en.slots', 'r', encoding = 'UTF-8') as file:
+    with open(os.getcwd() + f'/data_{src}/{src}.slots', 'r', encoding = 'UTF-8') as file:
         slot_labels_map = json.load(file)
     
     with open(os.getcwd() + f'/data_{lang}/{lang}.intents', 'r', encoding = 'UTF-8') as file:
@@ -607,20 +615,20 @@ def convert_eval(intent_labels, slot_labels, lang = 'zh'):
     
     label_to_pred_idx = {v: k for k, v in slot_labels_map.items()}
     conversion_slot_map = {idx: int(label_to_pred_idx[label]) for idx, label in zh_slot_labels_map.items()}
-
+    
     converted_intent_labels = [torch.tensor(conversion_intent_map.get(str(p.item()), -100)) for p in intent_labels]  
     converted_slot_labels = [torch.tensor([conversion_slot_map.get(str(s.item()), -100) for s in slot_seq]) for slot_seq in slot_labels]
-        
+    
     slot_tensor = torch.stack(converted_slot_labels) 
     intent_tensor = torch.stack(converted_intent_labels)
     return intent_tensor.to(device), slot_tensor.to(device)
     
 
-def convert_train(example):
-    with open(os.getcwd() + '/data_en/en.intents', 'r', encoding = 'UTF-8') as file:
+def convert_train(example, src = 'en'):
+    with open(os.getcwd() + f'/data_{src}/{src}.intents', 'r', encoding = 'UTF-8') as file:
         intent_labels_map = json.load(file)
     
-    with open(os.getcwd() + '/data_en/en.slots', 'r', encoding = 'UTF-8') as file:
+    with open(os.getcwd() + f'/data_{src}/{src}.slots', 'r', encoding = 'UTF-8') as file:
         slot_labels_map = json.load(file)
     
         
@@ -632,4 +640,3 @@ def convert_train(example):
     converted_slot_labels = [[int(label_to_pred_slot_idx.get(s, -100)) for s in slot_seq] for slot_seq in example['target_slots']]
     example['target_intents'], example['target_slots'] = converted_intent_labels, converted_slot_labels
     return example
-       
