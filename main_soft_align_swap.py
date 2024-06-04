@@ -309,19 +309,19 @@ if __name__ == "__main__":
     para_dataset = para_dataset.map(lambda x: convert_train(x, src = args.src), batched=True)    
 
     para_dataloader = DataLoader(para_dataset, batch_size=args.batch_size, shuffle=True, 
-                                collate_fn=CollatorMASSIVEIntentClassSlotFill_para(tokenizer=tokenizer, max_length=512))
+                                collate_fn=CollatorMASSIVEIntentClassSlotFill_para(tokenizer=tokenizer, max_length =100))
     train_dataloader = DataLoader(en_train, batch_size=args.batch_size, shuffle=True, 
-                                collate_fn=CollatorMASSIVEIntentClassSlotFill(tokenizer=tokenizer, max_length=512))
+                                collate_fn=CollatorMASSIVEIntentClassSlotFill(tokenizer=tokenizer, max_length =100))
     eval_dataloader = DataLoader(zh_val, batch_size=args.batch_size, shuffle=True,
-                                    collate_fn=CollatorMASSIVEIntentClassSlotFill(tokenizer=tokenizer, max_length=512))
+                                    collate_fn=CollatorMASSIVEIntentClassSlotFill(tokenizer=tokenizer, max_length =100))
     train_eval_dataloader = DataLoader(zh_train, batch_size=args.batch_size, shuffle=True,
-                                    collate_fn=CollatorMASSIVEIntentClassSlotFill(tokenizer=tokenizer, max_length=512))
+                                    collate_fn=CollatorMASSIVEIntentClassSlotFill(tokenizer=tokenizer, max_length =100))
 
 
     # eval_dataloader = DataLoader(de_val, batch_size=args.batch_size, shuffle=True,
-    #                                 collate_fn=CollatorMASSIVEIntentClassSlotFill(tokenizer=tokenizer, max_length=512))
+    #                                 collate_fn=CollatorMASSIVEIntentClassSlotFill(tokenizer=tokenizer, max_length =100))
     # train_eval_dataloader = DataLoader(de_train, batch_size=args.batch_size, shuffle=True,
-    #                                 collate_fn=CollatorMASSIVEIntentClassSlotFill(tokenizer=tokenizer, max_length=512))
+    #                                 collate_fn=CollatorMASSIVEIntentClassSlotFill(tokenizer=tokenizer, max_length =100))
     vocab = tokenizer.get_vocab()
     vocab_size = len(vocab)
 
@@ -363,9 +363,9 @@ if __name__ == "__main__":
         small_para_dataset = para_dataset.shuffle(seed=random_seed).select(range(200))
         small_train_dataset = en_train.shuffle(seed=random_seed).select(range(200))
         small_para_dataloader = DataLoader(small_para_dataset, batch_size=args.batch_size, shuffle=True, 
-                                collate_fn=CollatorMASSIVEIntentClassSlotFill_para(tokenizer=tokenizer, max_length=512))
+                                collate_fn=CollatorMASSIVEIntentClassSlotFill_para(tokenizer=tokenizer, max_length =100))
         small_train_dataloader = DataLoader(small_train_dataset, batch_size=args.batch_size, shuffle=True, 
-                                collate_fn=CollatorMASSIVEIntentClassSlotFill(tokenizer=tokenizer, max_length=512))
+                                collate_fn=CollatorMASSIVEIntentClassSlotFill(tokenizer=tokenizer, max_length =100))
         
         train(model, optimizer, lr_scheduler, small_train_dataloader, small_para_dataloader)
 
@@ -377,7 +377,7 @@ if __name__ == "__main__":
         
         small_eval_dataset = zh_val.select(range(10))
         small_eval_dataloader = DataLoader(small_eval_dataset, batch_size=args.batch_size, shuffle=True, 
-                                collate_fn=CollatorMASSIVEIntentClassSlotFill(tokenizer=tokenizer, max_length=512))
+                                collate_fn=CollatorMASSIVEIntentClassSlotFill(tokenizer=tokenizer, max_length =100))
         evaluate(model, small_eval_dataloader, )
 
 
