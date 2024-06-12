@@ -353,34 +353,37 @@ def eval_preds(pred_intents=None, lab_intents=None, pred_slots=None, lab_slots=N
 
     if lab_slots is not None and pred_slots is not None:
         bio_slot_labels, bio_slot_preds = [], []
-        # j = 0
+        j = 0
         for lab, pred, attn in zip(lab_slots, pred_slots, attn_masks):
             pred = list(pred)
             attn = list(attn)
             # Pad or truncate prediction as needed using `pad` arg
             if type(pred) == list:
-                pred = pred[:len(lab)] + [pad]*(len(lab) - len(pred))
+                # print(pred)
+                pred =  [pad]*(len(lab) - len(pred)) + pred[:len(lab)] # pad to the left
             # Fix for Issue 21 -- subwords after the first one from a word should be ignored
             for i, x in enumerate(lab):
                 if x.item() == -100:
                     pred[i] = torch.tensor(-100)
 
+            # raise ValueError()
+
             # convert to BIO
             bio_slot_labels.append(
                 convert_to_bio(lab, outside=labels_ignore, labels_merge=labels_merge, attn_mask = attn)
             )
-            # print('bio_lab:', bio_slot_labels[j][:10])
+            # print('bio_lab:', bio_slot_labels[j][:20])
             bio_slot_preds.append(
                 convert_to_bio(pred, outside=labels_ignore, labels_merge=labels_merge, attn_mask = attn)
             )
-            # print('bio_preds:', bio_slot_preds[j][:10])
-            # j += 1
+            # print('bio_preds:', bio_slot_preds[j][:20])
+            j += 1
         # raise ValueError()
-        # with open('bio_slot_labels.pkl', 'wb') as f:
-        #     pickle.dump(bio_slot_labels, f)
+        with open('bio_slot_labels.pkl', 'wb') as f:
+            pickle.dump(bio_slot_labels, f)
 
-        # with open('bio_slot_preds.pkl', 'wb') as f:
-        #     pickle.dump(bio_slot_preds, f)
+        with open('bio_slot_preds.pkl', 'wb') as f:
+            pickle.dump(bio_slot_preds, f)
             
     print('finish conversion to bio...')
 
@@ -435,7 +438,7 @@ def convert_to_bio(seq_tags, outside='Other', labels_merge=None, attn_mask = Non
         raise ValueError("Attention mask cannot be None!")
     seq_tags = [str(x.item()) for x in seq_tags]
     outside = [outside] if isinstance(outside, str) else outside
-    outside = [str(x.item()) for x in outside]
+    outside = [str(x) for x in outside]
 
     if labels_merge:
         labels_merge = [labels_merge] if type(labels_merge) != list else labels_merge
@@ -447,9 +450,11 @@ def convert_to_bio(seq_tags, outside='Other', labels_merge=None, attn_mask = Non
     prev_tag = None
     for i, tag in enumerate(seq_tags):
         if attn_mask[i] == 1:
-            if tag in outside:
+            if prev_tag is None and tag in labels_merge:
                 bio_tagged.append('O')
-                prev_tag = None
+            elif tag in outside:
+                bio_tagged.append('O')
+                prev_tag = tag
             elif tag != prev_tag and tag not in labels_merge:
                 bio_tagged.append('B-' + tag)
                 prev_tag = tag
@@ -616,7 +621,7 @@ def convert_eval(intent_labels, slot_labels, lang = 'zh', src = 'en'):
     label_to_pred_idx = {v: k for k, v in slot_labels_map.items()}
     conversion_slot_map = {idx: int(label_to_pred_idx[label]) for idx, label in zh_slot_labels_map.items()}
     
-    converted_intent_labels = [torch.tensor(conversion_intent_map.get(str(p.item()), -100)) for p in intent_labels]  
+    converted_intent_labels = [torch.tensor(conversion_intent_map.get(str(p.item()))) for p in intent_labels]  
     converted_slot_labels = [torch.tensor([conversion_slot_map.get(str(s.item()), -100) for s in slot_seq]) for slot_seq in slot_labels]
     
     slot_tensor = torch.stack(converted_slot_labels) 
@@ -636,7 +641,8 @@ def convert_train(example, src = 'en'):
     
     label_to_pred_slot_idx = {v: k for k, v in slot_labels_map.items()}
     
-    converted_intent_labels = [int(label_to_pred_intent_idx.get(p, -100)) for p in example['target_intents']]  
-    converted_slot_labels = [[int(label_to_pred_slot_idx.get(s, -100)) for s in slot_seq] for slot_seq in example['target_slots']]
+    converted_intent_labels = [int(label_to_pred_intent_idx.get(p)) for p in example['target_intents']]  
+    converted_slot_labels = [[int(label_to_pred_slot_idx.get(s)) for s in slot_seq] for slot_seq in example['target_slots']]
     example['target_intents'], example['target_slots'] = converted_intent_labels, converted_slot_labels
     return example
+       

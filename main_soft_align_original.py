@@ -1,3 +1,8 @@
+"""
+This version swaps the designation of source and target, as per paper. 
+"""
+
+
 # heavily modified from soft-align implementation in multiatis: 
 # https://github.com/amazon-science/multiatis/blob/main/code/scripts/bert_soft_align.py
 # implementation of soft-align in paper: https://arxiv.org/pdf/2004.14353
@@ -65,8 +70,7 @@ def load_checkpoint(model, optimizer, args, loader_name = 'labeled'):
             return model, optimizer, epoch
         else:
             return model, optimizer, 0
-
-
+            
 
 def train(model, optimizer, lr_scheduler, train_dataloader, para_dataloader):
     # num_slot_labels & num_intents: according to https://arxiv.org/pdf/2204.08582
@@ -77,8 +81,8 @@ def train(model, optimizer, lr_scheduler, train_dataloader, para_dataloader):
 
     model.to(device)
     ic_loss_fn = nn.CrossEntropyLoss(reduction='mean')
-    sl_loss_fn = nn.CrossEntropyLoss(reduction='mean')
-    mt_loss_fn = nn.CrossEntropyLoss(reduction='mean')
+    sl_loss_fn = nn.CrossEntropyLoss(reduction='none')
+    mt_loss_fn = nn.CrossEntropyLoss(reduction='none')
 
     paral_size = len(para_dataloader)
     label_size = len(train_dataloader)
@@ -95,54 +99,54 @@ def train(model, optimizer, lr_scheduler, train_dataloader, para_dataloader):
         
         # train on parallel data
         model.train()
-        # for para_batch in tqdm(para_dataloader, 
-        #                           total=len(para_dataloader)):
-        #     # swap source & target to match the paper
-        #     source, target, slot_label, intent_label, source_attn_mask = para_batch.values()
-        #     source, target, slot_label, intent_label, source_attn_mask = (source.to(device), 
-        #                                                                  target.to(device), slot_label.to(device), 
-        #                                                                  intent_label.to(device), 
-        #                                                                  source_attn_mask.to(device))
-        #     translation, intent_pred, slot_pred = model.translate_and_predict(source, 
-        #                                                                       target, 
-        #                                                                       source_attn_mask = source_attn_mask)
-            
-        #     intent_preds.append(intent_pred.detach().to('cpu'))
-        #     slot_preds.append(slot_pred.detach().to('cpu'))
-        #     intent_labels.append(intent_label.detach().to('cpu'))
-        #     slot_labels.append(slot_label.detach().to('cpu'))
+        for para_batch in tqdm(para_dataloader, 
+                                  total=len(para_dataloader)):
+                                  
+            source, target, slot_label, intent_label, source_attn_mask = para_batch.values()
+            source, target, slot_label, intent_label, source_attn_mask = (source.to(device), 
+                                                                         target.to(device), slot_label.to(device), 
+                                                                         intent_label.to(device), 
+                                                                         source_attn_mask.to(device))
+            translation, intent_pred, slot_pred = model.translate_and_predict(source, 
+                                                                              target, 
+                                                                              source_attn_mask = source_attn_mask)
+            intent_preds.append(intent_pred.detach().to('cpu'))
+            slot_preds.append(slot_pred.detach().to('cpu'))
+            intent_labels.append(intent_label.detach().to('cpu'))
+            slot_labels.append(slot_label.detach().to('cpu'))
 
-        #     ic_loss = ic_loss_fn(intent_pred, intent_label)
-        #     # slot_loss = sl_loss_fn(slot_pred.view(-1, slot_pred.size(-1)), slot_label.view(-1)) 
-        #     sl_loss = sl_loss_fn(slot_pred.transpose(1,2), slot_label[:, 1:])
-        #     mce_loss = mt_loss_fn(translation.transpose(1,2), target[:, 1:]) # since zh-en
-        #     loss = ic_loss + sl_loss + mce_loss
-        #     icsl_loss += ic_loss.detach().to('cpu').item() + sl_loss.detach().to('cpu').item()
-        #     mt_loss += mce_loss.item()
+            ic_loss = ic_loss_fn(intent_pred, intent_label)
+            # slot_loss = sl_loss_fn(slot_pred.view(-1, slot_pred.size(-1)), slot_label.view(-1)) 
+            sl_loss = sl_loss_fn(slot_pred.transpose(1,2), slot_label[:, 1:])
+            sl_loss = sl_loss * source_attn_mask[:, 1:]
+            sl_loss = (sl_loss.sum(-1)/source_attn_mask[:, 1:].sum(-1)).mean()
+
+            mce_loss = mt_loss_fn(translation.transpose(1,2), target[:, 1:],) # since zh-en
+            mce_loss = mce_loss * source_attn_mask[:, 1:]
+            mce_loss = (mce_loss.sum(-1)/source_attn_mask[:, 1:].sum(-1)).mean()
+
+            loss = ic_loss + sl_loss + mce_loss
+            icsl_loss += ic_loss.detach().to('cpu').item() + sl_loss.detach().to('cpu').item()
+            mt_loss += mce_loss.item()
             
-        #     optimizer.zero_grad()
-        #     loss.backward()
-        #     optimizer.step()
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
  
 
-        # save_checkpoint(model, optimizer, epoch, args, loader_name = 'parallel')
-        # print('saved checkpoint...')
-        # predictions = (torch.cat(intent_preds), torch.cat(slot_preds))
-        # label_ids = (torch.cat(intent_labels), torch.cat(slot_labels))
+        save_checkpoint(model, optimizer, epoch, args, loader_name = 'parallel')
+        print('saved checkpoint...')
+        predictions = (torch.cat(intent_preds), torch.cat(slot_preds))
+        label_ids = (torch.cat(intent_labels), torch.cat(slot_labels))
 
-        # eval_ = {'predictions': (torch.cat(intent_preds), torch.cat(slot_preds)),
-        #              'label_ids': (torch.cat(intent_labels), torch.cat(slot_labels))}
+        eval_ = {'predictions': (torch.cat(intent_preds), torch.cat(slot_preds)),
+                     'label_ids': (torch.cat(intent_labels), torch.cat(slot_labels))}
             
-        # pbar.set_postfix({'dataset': 'parallel',
-        #         'train_loss': (icsl_loss + mt_loss) / paral_size , 
-        #           'icsl_loss': icsl_loss / paral_size,
-        #           'mt_loss': mt_loss / paral_size,})
-        
-        # eval on zh every 3 epochs
-        # if epoch%3 == 0:
-        # res = evaluate(model, eval_dataloader = train_eval_dataloader, train_eval= True)
-        
-        # sys.stdout.flush()
+        pbar.set_postfix({'dataset': 'parallel',
+                'train_loss': (icsl_loss + mt_loss) / paral_size , 
+                  'icsl_loss': icsl_loss / paral_size,
+                  'mt_loss': mt_loss / paral_size,})
+
         
         # train on labeled data
         for batch in tqdm(train_dataloader, 
@@ -155,7 +159,11 @@ def train(model, optimizer, lr_scheduler, train_dataloader, para_dataloader):
             ic_loss = ic_loss_fn(intent_pred, intent_label)
             # slot_loss = sl_loss_fn(slot_pred.view(-1, slot_pred.size(-1)), slot_label.view(-1))
             sl_loss = sl_loss_fn(slot_pred.transpose(1,2), slot_label[:,1:])
-            loss = ic_loss + sl_loss
+            sl_loss = sl_loss_fn(slot_pred.transpose(1,2), slot_label[:, 1:])
+            sl_loss = sl_loss * attn_mask[:, 1:]
+            sl_loss = (sl_loss.sum(-1)/attn_mask[:, 1:].sum(-1)).mean()
+
+            loss = ic_loss + sl_loss.mean()
             step_loss += loss.item()
             
             optimizer.zero_grad()
@@ -187,6 +195,7 @@ def train(model, optimizer, lr_scheduler, train_dataloader, para_dataloader):
         evaluate(model, eval_dataloader = train_eval_dataloader, train_eval= True)
         # lr_scheduler.step()
 
+
 def evaluate(model, eval_dataloader, train_eval = False):
     """Evaluate the model on validation dataset.
         
@@ -194,7 +203,7 @@ def evaluate(model, eval_dataloader, train_eval = False):
     using  `eval_preds` from massive_utils
     """
     ic_loss_fn = nn.CrossEntropyLoss(reduction='mean')
-    sl_loss_fn = nn.CrossEntropyLoss(reduction='mean')
+    sl_loss_fn = nn.CrossEntropyLoss(reduction='none')
 
     intent_preds = []
     slot_preds = []
@@ -215,7 +224,10 @@ def evaluate(model, eval_dataloader, train_eval = False):
             intent_label, slot_label = convert_eval(intent_label, slot_label, lang = args.lang, src = args.src) 
 
             ic_loss = ic_loss_fn(intent_pred, intent_label)
-            sl_loss = sl_loss_fn(slot_pred.transpose(1,2), slot_label[:,1:])
+            sl_loss = sl_loss_fn(slot_pred.transpose(1,2), slot_label[:, 1:])
+            sl_loss = sl_loss * attn_mask[:, 1:]
+            sl_loss = (sl_loss.sum(-1)/attn_mask[:, 1:].sum(-1)).mean()
+
             loss = ic_loss + sl_loss
             step_loss += loss.item()
             
@@ -224,7 +236,6 @@ def evaluate(model, eval_dataloader, train_eval = False):
             intent_labels.append(intent_label.detach().to('cpu'))
             slot_labels.append(slot_label.detach().to('cpu'))
             attn_masks.append(torch.tensor(attn_mask.detach().to('cpu').tolist()))
-
 
         predictions = (torch.cat(intent_preds), torch.cat(slot_preds))
         label_ids = (torch.cat(intent_labels), torch.cat(slot_labels))
@@ -241,7 +252,9 @@ def evaluate(model, eval_dataloader, train_eval = False):
         # eval on zh            
         compute_metrics = create_compute_metrics(intent_labels = intent_labels_map, 
                                                  slot_labels = slot_labels_map,
-                                                 metrics ='all',)
+                                                 metrics ='all',
+                                                 ignore_labels= ['Other']
+                                                 )
         res = compute_metrics(eval_data)
         average_loss = step_loss / eval_size
 
@@ -299,6 +312,7 @@ if __name__ == "__main__":
 
     para_dataset = deepcopy(en_train)
     para_dataset = para_dataset.add_column("target_utt", zh_train['utt'])
+    # not used
     para_dataset = para_dataset.add_column("target_slots", zh_train['slots_str'])
     para_dataset = para_dataset.add_column("target_intents", zh_train['intent_str'])
     
@@ -309,19 +323,19 @@ if __name__ == "__main__":
     para_dataset = para_dataset.map(lambda x: convert_train(x, src = args.src), batched=True)    
 
     para_dataloader = DataLoader(para_dataset, batch_size=args.batch_size, shuffle=True, 
-                                collate_fn=CollatorMASSIVEIntentClassSlotFill_para(tokenizer=tokenizer, max_length=512))
+                                collate_fn=CollatorMASSIVEIntentClassSlotFill_para(tokenizer=tokenizer, max_length =200))
     train_dataloader = DataLoader(en_train, batch_size=args.batch_size, shuffle=True, 
-                                collate_fn=CollatorMASSIVEIntentClassSlotFill(tokenizer=tokenizer, max_length=512))
+                                collate_fn=CollatorMASSIVEIntentClassSlotFill(tokenizer=tokenizer, max_length =200))
     eval_dataloader = DataLoader(zh_val, batch_size=args.batch_size, shuffle=True,
-                                    collate_fn=CollatorMASSIVEIntentClassSlotFill(tokenizer=tokenizer, max_length=512))
+                                    collate_fn=CollatorMASSIVEIntentClassSlotFill(tokenizer=tokenizer, max_length =200))
     train_eval_dataloader = DataLoader(zh_train, batch_size=args.batch_size, shuffle=True,
-                                    collate_fn=CollatorMASSIVEIntentClassSlotFill(tokenizer=tokenizer, max_length=512))
+                                    collate_fn=CollatorMASSIVEIntentClassSlotFill(tokenizer=tokenizer, max_length =200))
 
 
     # eval_dataloader = DataLoader(de_val, batch_size=args.batch_size, shuffle=True,
-    #                                 collate_fn=CollatorMASSIVEIntentClassSlotFill(tokenizer=tokenizer, max_length=512))
+    #                                 collate_fn=CollatorMASSIVEIntentClassSlotFill(tokenizer=tokenizer, max_length =100))
     # train_eval_dataloader = DataLoader(de_train, batch_size=args.batch_size, shuffle=True,
-    #                                 collate_fn=CollatorMASSIVEIntentClassSlotFill(tokenizer=tokenizer, max_length=512))
+    #                                 collate_fn=CollatorMASSIVEIntentClassSlotFill(tokenizer=tokenizer, max_length =100))
     vocab = tokenizer.get_vocab()
     vocab_size = len(vocab)
 
@@ -360,12 +374,12 @@ if __name__ == "__main__":
         optimizer = Adam(model.parameters(), lr = args.lr, weight_decay=1e-4)
         lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max = 300)
         
-        small_para_dataset = para_dataset.shuffle(seed=random_seed).select(range(200))
-        small_train_dataset = en_train.shuffle(seed=random_seed).select(range(200))
+        small_para_dataset = para_dataset.shuffle(seed=random_seed).select(range(1000))
+        small_train_dataset = en_train.shuffle(seed=random_seed).select(range(1000))
         small_para_dataloader = DataLoader(small_para_dataset, batch_size=args.batch_size, shuffle=True, 
-                                collate_fn=CollatorMASSIVEIntentClassSlotFill_para(tokenizer=tokenizer, max_length=512))
+                                collate_fn=CollatorMASSIVEIntentClassSlotFill_para(tokenizer=tokenizer, max_length =200))
         small_train_dataloader = DataLoader(small_train_dataset, batch_size=args.batch_size, shuffle=True, 
-                                collate_fn=CollatorMASSIVEIntentClassSlotFill(tokenizer=tokenizer, max_length=512))
+                                collate_fn=CollatorMASSIVEIntentClassSlotFill(tokenizer=tokenizer, max_length =200))
         
         train(model, optimizer, lr_scheduler, small_train_dataloader, small_para_dataloader)
 
@@ -377,9 +391,7 @@ if __name__ == "__main__":
         
         small_eval_dataset = zh_val.select(range(10))
         small_eval_dataloader = DataLoader(small_eval_dataset, batch_size=args.batch_size, shuffle=True, 
-                                collate_fn=CollatorMASSIVEIntentClassSlotFill(tokenizer=tokenizer, max_length=512))
+                                collate_fn=CollatorMASSIVEIntentClassSlotFill(tokenizer=tokenizer, max_length =200))
         evaluate(model, small_eval_dataloader, )
-
-
 
 

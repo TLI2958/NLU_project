@@ -1,4 +1,4 @@
-name: NLU_backup
+name: NLU_project
 channels:
   - defaults
 dependencies:
@@ -112,4 +112,3 @@ dependencies:
       - wrapt==1.13.3
       - xxhash==2.0.2
       - yarl==1.7.2
-prefix: /home/$USER/.conda/envs/NLU_project

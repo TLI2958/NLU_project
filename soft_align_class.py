@@ -121,7 +121,7 @@ class MultiTaskICSL(nn.Module):
         # https://huggingface.co/docs/diffusers/en/optimization/torch2.0#scaled-dot-product-attention
         attn_mask = attention_mask.unsqueeze(2).expand(-1,-1, attention_mask.shape[-1]).transpose(-2,-1)
         attn_output = F.scaled_dot_product_attention(query = tgt_embed, key = src_encoded, 
-                                                     value =src_encoded, 
+                                                     value = src_encoded, 
                                                      attn_mask = attn_mask,
                                                      dropout_p=0.02)
         
